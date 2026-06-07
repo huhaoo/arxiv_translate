@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arxiv-translate"
+version = "0.1.0"
+description = "Download arXiv TeX sources, translate them to Chinese with DeepSeek, and rebuild the paper."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "arxiv-translate contributors" }]
+dependencies = []
+
+[project.scripts]
+arxiv-translate = "arxiv_translate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["arxiv_translate*"]
