@@ -8,8 +8,14 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .deepseek import DeepSeekClient
-from .tex import should_translate_tex, split_latex_for_translation
+from .deepseek import DeepSeekClient, DeepSeekFailoverClient, validate_translation_response
+from .errors import DeepSeekError
+from .tex import should_translate_tex, split_latex_for_translation, strip_latex_comments
+
+DEFAULT_CHUNK_CHARS = 2048
+DEFAULT_CONTEXT_CHARS = 250
+DEFAULT_PARALLEL_CHUNKS = 8
+DeepSeekLike = DeepSeekClient | DeepSeekFailoverClient
 
 
 class TranslationCache:
@@ -43,12 +49,13 @@ def prepare_translated_tree(source_dir: Path, translated_dir: Path) -> None:
 
 def translate_tex_tree(
     root: Path,
-    client: DeepSeekClient,
+    client: DeepSeekLike,
     cache: TranslationCache,
-    chunk_chars: int = 4096,
-    context_chars: int = 500,
-    parallel_chunks: int = 4,
+    chunk_chars: int = DEFAULT_CHUNK_CHARS,
+    context_chars: int = DEFAULT_CONTEXT_CHARS,
+    parallel_chunks: int = DEFAULT_PARALLEL_CHUNKS,
     paper_guide: str = "",
+    appendix_client: DeepSeekLike | None = None,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> list[Path]:
     context_chars = max(0, context_chars)
@@ -62,7 +69,10 @@ def translate_tex_tree(
 
     jobs: list[tuple[Path, str, list[str]]] = []
     for path in tex_files:
-        original = path.read_text(encoding="utf-8", errors="ignore")
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        original = strip_latex_comments(raw)
+        if original != raw:
+            path.write_text(original, encoding="utf-8", newline="")
         if not should_translate_tex(original):
             continue
 
@@ -75,7 +85,7 @@ def translate_tex_tree(
     outputs: dict[Path, list[str | None]] = {
         path: [None] * len(chunks) for path, _, chunks in jobs
     }
-    work_items: list[tuple[Path, int, str, str, str]] = []
+    work_items: list[tuple[Path, int, str, str, str, DeepSeekLike]] = []
 
     for path, original, chunks in jobs:
         offset = 0
@@ -85,8 +95,16 @@ def translate_tex_tree(
             context_after = original[
                 context_after_start : context_after_start + context_chars
             ]
+            chunk_client = _client_for_chunk(
+                path,
+                original,
+                offset,
+                len(chunk),
+                client,
+                appendix_client,
+            )
             work_items.append(
-                (path, index, chunk, context_before, context_after)
+                (path, index, chunk, context_before, context_after, chunk_client)
             )
             offset += len(chunk)
 
@@ -100,10 +118,17 @@ def translate_tex_tree(
                 context_before,
                 context_after,
                 paper_guide,
-                client,
+                chunk_client,
                 cache,
             )
-            for path, index, chunk, context_before, context_after in work_items
+            for (
+                path,
+                index,
+                chunk,
+                context_before,
+                context_after,
+                chunk_client,
+            ) in work_items
         ]
         for future in as_completed(futures):
             path, index, translated_chunk = future.result()
@@ -114,7 +139,11 @@ def translate_tex_tree(
 
     for path, _, _ in jobs:
         out = outputs[path]
-        path.write_text("".join(part or "" for part in out), encoding="utf-8", newline="")
+        path.write_text(
+            "".join(part or "" for part in out),
+            encoding="utf-8",
+            newline="",
+        )
         translated.append(path)
 
     return translated
@@ -127,13 +156,22 @@ def _translate_chunk(
     context_before: str,
     context_after: str,
     paper_guide: str,
-    client: DeepSeekClient,
+    client: DeepSeekLike,
     cache: TranslationCache,
 ) -> tuple[Path, int, str]:
-    cache_key = _cache_key(chunk, context_before, context_after, paper_guide)
+    cache_key = _cache_key(
+        chunk,
+        context_before,
+        context_after,
+        paper_guide,
+        client.model,
+    )
     cached = cache.get(cache_key)
     if cached is not None:
-        return path, index, cached
+        try:
+            return path, index, validate_translation_response(cached, source_fragment=chunk)
+        except DeepSeekError:
+            pass
 
     translated_chunk = client.translate_latex(
         chunk,
@@ -154,6 +192,7 @@ def _cache_key(
     context_before: str,
     context_after: str,
     paper_guide: str,
+    model: str,
 ) -> str:
     return json.dumps(
         {
@@ -161,8 +200,34 @@ def _cache_key(
             "context_before": context_before,
             "context_after": context_after,
             "paper_guide": paper_guide,
-            "prompt": "latex-guide-context-v1",
+            "model": model,
+            "prompt": "latex-guide-context-v2",
         },
         ensure_ascii=False,
         sort_keys=True,
+    )
+
+
+def _client_for_chunk(
+    path: Path,
+    original: str,
+    offset: int,
+    chunk_length: int,
+    main_client: DeepSeekLike,
+    appendix_client: DeepSeekLike | None,
+) -> DeepSeekLike:
+    if appendix_client is None:
+        return main_client
+    if _is_appendix_path(path):
+        return appendix_client
+    appendix_start = original.find(r"\appendix")
+    if appendix_start != -1 and offset + chunk_length > appendix_start:
+        return appendix_client
+    return main_client
+
+
+def _is_appendix_path(path: Path) -> bool:
+    return any(
+        "appendix" in part.lower() or "appendices" in part.lower()
+        for part in path.parts
     )

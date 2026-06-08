@@ -20,6 +20,7 @@ def compile_latex(root: Path, main_tex: Path) -> Path:
     if latexmk:
         cmd = [
             latexmk,
+            "-g",
             "-xelatex",
             "-interaction=nonstopmode",
             "-halt-on-error",

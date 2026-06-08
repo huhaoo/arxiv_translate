@@ -3,6 +3,20 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+VERBATIM_ENVIRONMENTS = {
+    "alltt",
+    "filecontents",
+    "filecontents*",
+    "lstlisting",
+    "minted",
+    "Verbatim",
+    "verbatim",
+}
+BEGIN_ENV_RE = re.compile(r"\\begin\{([^}]+)\}")
+END_ENV_RE = re.compile(r"\\end\{([^}]+)\}")
+TITLE_COMMAND_RE = re.compile(r"(?<!\\)\\title\b")
+PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{")
+
 
 def discover_main_tex(root: Path, explicit: str | None = None) -> Path:
     if explicit:
@@ -59,6 +73,184 @@ def split_latex_for_translation(text: str, max_chars: int) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
+
+
+def strip_latex_comments(text: str) -> str:
+    """Remove TeX comments while preserving escaped percent signs and code blocks."""
+
+    output: list[str] = []
+    verbatim_stack: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if verbatim_stack:
+            output.append(line)
+            _update_verbatim_stack(line, verbatim_stack)
+            continue
+
+        stripped = _strip_latex_comment_from_line(line)
+        output.append(stripped)
+        _update_verbatim_stack(stripped, verbatim_stack)
+    return "".join(output)
+
+
+def ensure_english_pdf_title(
+    translated_main_tex: Path,
+    original_main_tex: Path,
+    fallback_title: str,
+) -> bool:
+    """Keep the translated PDF's visible title equal to the English source title."""
+
+    translated = translated_main_tex.read_text(encoding="utf-8", errors="ignore")
+    original = original_main_tex.read_text(encoding="utf-8", errors="ignore")
+
+    updated = translated
+    pdf_title_assignment = extract_pdf_title_assignment(original)
+    if pdf_title_assignment is None and fallback_title:
+        pdf_title_assignment = f"Title={{{escape_latex_title_text(fallback_title)}}}"
+    if pdf_title_assignment is not None:
+        updated = replace_pdf_title_assignment(updated, pdf_title_assignment)
+
+    title_command = extract_latex_title_command(original)
+    if title_command is not None and _title_command_has_content(title_command):
+        updated = replace_latex_title_command(updated, title_command)
+    elif fallback_title and extract_latex_title_command(updated) is not None:
+        updated = replace_latex_title_command(
+            updated,
+            rf"\title{{{escape_latex_title_text(fallback_title)}}}",
+            insert_if_missing=False,
+        )
+
+    if updated == translated:
+        return False
+    translated_main_tex.write_text(updated, encoding="utf-8")
+    return True
+
+
+def extract_latex_title_command(text: str) -> str | None:
+    span = _find_latex_title_span(text)
+    if span is None:
+        return None
+    return text[span[0] : span[1]]
+
+
+def replace_latex_title_command(
+    text: str,
+    title_command: str,
+    *,
+    insert_if_missing: bool = True,
+) -> str:
+    span = _find_latex_title_span(text)
+    if span is not None:
+        return text[: span[0]] + title_command + text[span[1] :]
+
+    if not insert_if_missing:
+        return text
+
+    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
+    if begin_document:
+        insertion = title_command.rstrip() + "\n"
+        return text[: begin_document.start()] + insertion + text[begin_document.start() :]
+    return text
+
+
+def extract_pdf_title_assignment(text: str) -> str | None:
+    span = _find_pdf_title_assignment_span(text)
+    if span is None:
+        return None
+    return text[span[0] : span[1]]
+
+
+def replace_pdf_title_assignment(text: str, title_assignment: str) -> str:
+    span = _find_pdf_title_assignment_span(text)
+    if span is None:
+        return text
+    return text[: span[0]] + title_assignment + text[span[1] :]
+
+
+def escape_latex_title_text(title: str) -> str:
+    """Escape plain arXiv metadata title text while preserving simple $...$ math."""
+
+    escaped: list[str] = []
+    in_math = False
+    i = 0
+    while i < len(title):
+        char = title[i]
+        if char == "$" and (i == 0 or title[i - 1] != "\\"):
+            in_math = not in_math
+            escaped.append(char)
+        elif not in_math and char in {"&", "%", "#", "_", "{", "}"}:
+            escaped.append("\\" + char)
+        else:
+            escaped.append(char)
+        i += 1
+    return "".join(escaped)
+
+
+def _find_latex_title_span(text: str) -> tuple[int, int] | None:
+    for match in TITLE_COMMAND_RE.finditer(text):
+        end = _parse_title_command_end(text, match.end())
+        if end is not None:
+            return match.start(), end
+    return None
+
+
+def _find_pdf_title_assignment_span(text: str) -> tuple[int, int] | None:
+    for match in PDF_TITLE_ASSIGNMENT_RE.finditer(text):
+        brace_start = match.end() - 1
+        end = _find_balanced_end(text, brace_start, "{", "}")
+        if end is not None:
+            return match.start(), end
+    return None
+
+
+def _title_command_has_content(title_command: str) -> bool:
+    span = _find_latex_title_span(title_command)
+    if span is None:
+        return False
+
+    command_start, command_end = span
+    index = title_command.find("{", command_start, command_end)
+    if index == -1:
+        return False
+    content = title_command[index + 1 : command_end - 1]
+    return bool(content.strip())
+
+
+def _parse_title_command_end(text: str, start: int) -> int | None:
+    index = _skip_whitespace(text, start)
+    while index < len(text) and text[index] == "[":
+        end = _find_balanced_end(text, index, "[", "]")
+        if end is None:
+            return None
+        index = _skip_whitespace(text, end)
+
+    if index >= len(text) or text[index] != "{":
+        return None
+    return _find_balanced_end(text, index, "{", "}")
+
+
+def _find_balanced_end(text: str, start: int, open_char: str, close_char: str) -> int | None:
+    depth = 0
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == open_char:
+            depth += 1
+        elif char == close_char:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return None
+
+
+def _skip_whitespace(text: str, start: int) -> int:
+    index = start
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _is_safe_latex_boundary(text: str) -> bool:
@@ -167,6 +359,48 @@ def _read_environment_command(text: str, start: int, command: str) -> str | None
         return None
     env_name = text[start + len(prefix) : end]
     return env_name or None
+
+
+def _strip_latex_comment_from_line(line: str) -> str:
+    i = 0
+    while i < len(line):
+        if line[i] == "%" and not _is_escaped_percent(line, i):
+            if not line[:i].strip():
+                return ""
+            newline = _line_ending(line)
+            return line[:i].rstrip() + newline
+        i += 1
+    return line
+
+
+def _is_escaped_percent(line: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and line[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _line_ending(line: str) -> str:
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    if line.endswith("\r"):
+        return "\r"
+    return ""
+
+
+def _update_verbatim_stack(line: str, stack: list[str]) -> None:
+    for match in re.finditer(r"\\(?:begin|end)\{([^}]+)\}", line):
+        env_name = match.group(1)
+        if env_name not in VERBATIM_ENVIRONMENTS:
+            continue
+        if match.group(0).startswith(r"\begin"):
+            stack.append(env_name)
+        elif stack and stack[-1] == env_name:
+            stack.pop()
 
 
 def should_translate_tex(text: str) -> bool:

@@ -23,7 +23,9 @@ class DeepSeekError(ArxivTranslateError):
         *,
         status_code: int | None = None,
         retryable: bool = False,
+        protocol_violation: bool = False,
     ):
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
+        self.protocol_violation = protocol_violation

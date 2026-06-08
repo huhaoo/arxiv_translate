@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .deepseek import DeepSeekClient
+from .deepseek import DeepSeekClient, DeepSeekFailoverClient
+from .tex import strip_latex_comments
 
 
 def load_or_generate_paper_guide(
     source_dir: Path,
     guide_path: Path,
-    client: DeepSeekClient,
+    client: DeepSeekClient | DeepSeekFailoverClient,
 ) -> str:
     if guide_path.exists():
         return guide_path.read_text(encoding="utf-8")
@@ -26,6 +27,6 @@ def collect_latex_document(source_dir: Path) -> str:
         if not path.is_file() or path.suffix.lower() not in {".tex", ".ltx"}:
             continue
         relative = path.relative_to(source_dir).as_posix()
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        text = strip_latex_comments(path.read_text(encoding="utf-8", errors="ignore"))
         parts.append(f"<LATEX_FILE path=\"{relative}\">\n{text}\n</LATEX_FILE>")
     return "\n\n".join(parts)

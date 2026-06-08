@@ -32,6 +32,8 @@ def format_endnote_import(metadata: ArxivMetadata, attachments: list[Path]) -> s
         f"%X {metadata.abstract}",
     ]
 
+    if metadata.citation_key:
+        lines.insert(1, f"%F {metadata.citation_key}")
     if metadata.doi:
         lines.append(f"%R {metadata.doi}")
     if metadata.journal_ref:

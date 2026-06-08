@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from xml.etree import ElementTree
 
 from .errors import ArxivTranslateError
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
+ARXIV_BIBTEX_URL = "https://arxiv.org/bibtex"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 ARXIV_NS = {"arxiv": "http://arxiv.org/schemas/atom"}
+BIBTEX_KEY_RE = re.compile(r"@\w+\s*\{\s*([^,\s]+)\s*,")
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class ArxivMetadata:
     doi: str | None = None
     journal_ref: str | None = None
     comment: str | None = None
+    citation_key: str | None = None
 
     @property
     def abs_url(self) -> str:
@@ -55,7 +59,40 @@ def fetch_arxiv_metadata(arxiv_id: str, timeout: int = 30) -> ArxivMetadata:
             f"failed to fetch arXiv metadata for {arxiv_id}: {exc.reason}"
         ) from exc
 
-    return parse_arxiv_metadata(body, arxiv_id)
+    metadata = parse_arxiv_metadata(body, arxiv_id)
+    return replace(
+        metadata,
+        citation_key=fetch_arxiv_bibtex_key(arxiv_id, timeout=timeout),
+    )
+
+
+def fetch_arxiv_bibtex_key(arxiv_id: str, timeout: int = 30) -> str:
+    encoded_id = urllib.parse.quote(arxiv_id, safe="/")
+    request = urllib.request.Request(
+        f"{ARXIV_BIBTEX_URL}/{encoded_id}",
+        headers={"User-Agent": "arxiv-translate/0.1 (https://arxiv.org; mailto:none)"},
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        raise ArxivTranslateError(
+            f"failed to fetch arXiv BibTeX citation for {arxiv_id}: HTTP {exc.code}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise ArxivTranslateError(
+            f"failed to fetch arXiv BibTeX citation for {arxiv_id}: {exc.reason}"
+        ) from exc
+
+    return parse_bibtex_key(body.decode("utf-8", errors="replace"), arxiv_id)
+
+
+def parse_bibtex_key(bibtex: str, arxiv_id: str) -> str:
+    match = BIBTEX_KEY_RE.search(bibtex)
+    if not match:
+        raise ArxivTranslateError(f"arXiv BibTeX citation key not found for {arxiv_id}")
+    return match.group(1)
 
 
 def parse_arxiv_metadata(body: bytes, arxiv_id: str) -> ArxivMetadata:

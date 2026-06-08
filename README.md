@@ -16,20 +16,36 @@ Supported input URL forms:
 - A local TeX distribution for compilation, preferably with `latexmk` and `xelatex`
 
 The translator uses an OpenAI-compatible chat completions endpoint configured in
-`config.local.json`. All fields shown below are required.
+`config.local.json`. The file must be a JSON array, and all fields shown below
+are required in every object.
 
 ## API key config
 
-Copy `config.local.example.json` to `config.local.json`, then put your API key there:
+Copy `config.local.example.json` to `config.local.json`, then put your API keys there:
 
 ```json
-{
-  "deepseek_api_key": "sk-your-deepseek-api-key",
-  "deepseek_model": "deepseek-v4-pro",
-  "deepseek_guide_model": "deepseek-v4-flash",
-  "deepseek_base_url": "https://api.deepseek.com/chat/completions"
-}
+[
+  {
+    "deepseek_api_key": "sk-your-deepseek-api-key",
+    "deepseek_model": "DeepSeek-V4-Pro",
+    "deepseek_guide_model": "DeepSeek-V4-Pro",
+    "deepseek_appendix_model": "DeepSeek-V4-Pro",
+    "deepseek_base_url": "https://llmapi.paratera.com/chat/completions"
+  },
+  {
+    "deepseek_api_key": "sk-your-backup-deepseek-api-key",
+    "deepseek_model": "deepseek-v4-pro",
+    "deepseek_guide_model": "deepseek-v4-flash",
+    "deepseek_appendix_model": "deepseek-v4-flash",
+    "deepseek_base_url": "https://api.deepseek.com/chat/completions"
+  }
+]
 ```
+
+The tool tries these configs in order. If one config fails for a DeepSeek
+request, it automatically switches to the next config.
+The first example uses Paratera's OpenAI-compatible endpoint; the second keeps
+the official DeepSeek endpoint as a backup.
 
 `config.local.json` is ignored by git so the key stays local to your machine.
 
@@ -60,7 +76,7 @@ Useful flags:
 ```powershell
 python -m arxiv_translate https://arxiv.org/pdf/2401.00001.pdf --no-compile
 python -m arxiv_translate 2401.00001 --main paper.tex
-python -m arxiv_translate 2401.00001 --chunk-chars 4096 --context-chars 500 --parallel-chunks 4
+python -m arxiv_translate 2401.00001 --chunk-chars 2048 --context-chars 250 --parallel-chunks 8
 python -m arxiv_translate 2401.00001 --redo
 python -m arxiv_translate https://arxiv.org/html/2401.00001 --keep-source-archive
 ```
@@ -69,15 +85,23 @@ If the output directory already contains a completed result, the command skips
 the paper before making network or DeepSeek requests. Use `--redo` to force the
 full workflow again.
 
-By default, each translation request sends one TeX chunk of up to 4096
-characters plus 500 characters of previous context and 500 characters of next
+By default, each translation request sends one TeX chunk of up to 2048
+characters plus 250 characters of previous context and 250 characters of next
 context. The prompt instructs DeepSeek to use the context only for terminology
 and coherence, and to output only the current chunk translation without repeated
 context.
 
-The tool sends up to 4 translation chunks concurrently by default. Use
+The tool sends up to 8 translation chunks concurrently by default. Use
 `--parallel-chunks 1` for strictly sequential requests, or lower the value if
 the API rate limit is tight.
+
+If DeepSeek returns markdown fences or internal prompt boundary tags instead of
+raw LaTeX, the translation request is retried immediately; the default retry
+limit is 3 attempts.
+
+Appendix TeX files, and chunks after a `\appendix` command, use
+`deepseek_appendix_model` so long appendices can use a cheaper flash model while
+the main paper uses `deepseek_model`.
 
 During translation, the command prints a compact chunk progress bar so long
 papers have visible forward progress.
@@ -113,11 +137,12 @@ If arXiv has no TeX source for the paper, the command still writes
 
 To add the record to EndNote, import `endnote.enw` with the `EndNote Import`
 filter. The file includes arXiv metadata plus file attachment entries for
-`original.pdf`; it also includes the translated PDF when TeX translation and
-compilation succeeds.
+`original.pdf`; its label is the key from arXiv's exported BibTeX citation. It
+also includes the translated PDF when TeX translation and compilation succeeds.
 
-## Tests
+## Validation
 
 ```powershell
-python -m unittest discover -s tests
+python -m arxiv_translate --help
+python -m compileall arxiv_translate
 ```
