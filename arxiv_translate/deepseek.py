@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 import time
 import urllib.error
 import urllib.request
 from socket import timeout as SocketTimeout
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Callable
 
 from .errors import DeepSeekError
 
@@ -74,6 +74,7 @@ Preserve exactly:
 - Custom macro definitions, newcommands, renewcommands, def, let, catcode, counters, lengths, package setup, and preamble configuration.
 - The complete \\title command and all of its arguments; keep the PDF title in the original English.
 - Hyperref PDF title metadata such as Title={...} and pdftitle={...}; keep the PDF title in the original English.
+- Internal placeholders such as \\AXTProtectedTextBox{...}; keep them unchanged.
 
 When translating inside command arguments:
 - You may translate visible prose in arguments such as \\section{...}, \\caption{...}, \\item ..., and theorem/proof text.
@@ -109,9 +110,10 @@ class DeepSeekClient:
             try:
                 return self._post(payload).strip()
             except DeepSeekError as exc:
-                if attempt == self.retries or not exc.retryable:
+                if attempt == self.retries:
                     raise
-                time.sleep(_retry_delay(exc, attempt))
+                if exc.retryable:
+                    time.sleep(_retry_delay(exc, attempt))
 
         raise DeepSeekError("paper guide generation failed after retries")
 
@@ -121,9 +123,13 @@ class DeepSeekClient:
         context_before: str = "",
         context_after: str = "",
         paper_guide: str = "",
+        warning_logger: Callable[[str], None] | None = None,
     ) -> str:
         retry_warning = ""
-        for attempt in range(1, self.retries + 1):
+        request_errors = 0
+        untranslated_warnings = 0
+        last_untranslated_content = ""
+        while True:
             payload = {
                 "model": self.model,
                 "messages": [
@@ -142,17 +148,35 @@ class DeepSeekClient:
                 "temperature": self.temperature,
             }
             try:
-                return validate_translation_response(
-                    self._post(payload),
-                    source_fragment=fragment,
+                content = self._post(payload)
+                validate_translation_protocol(content)
+                untranslated = find_untranslated_english_warning(content, fragment)
+                if not untranslated:
+                    return content
+                untranslated_warnings += 1
+                last_untranslated_content = content
+                retry_warning = (
+                    "The previous response left a long English prose span untranslated: "
+                    f"{untranslated}"
                 )
+                if untranslated_warnings >= self.retries:
+                    _warn_untranslated_accepted(
+                        warning_logger,
+                        self.model,
+                        self.base_url,
+                        untranslated,
+                    )
+                    return last_untranslated_content
+                continue
             except DeepSeekError as exc:
-                if attempt == self.retries or not exc.retryable:
+                request_errors += 1
+                if request_errors >= self.retries:
                     raise
                 if exc.protocol_violation:
                     retry_warning = str(exc)
                     continue
-                time.sleep(_retry_delay(exc, attempt))
+                if exc.retryable:
+                    time.sleep(_retry_delay(exc, request_errors))
 
         raise DeepSeekError("translation failed after retries")
 
@@ -200,8 +224,8 @@ class DeepSeekClient:
 class DeepSeekFailoverClient:
     clients: list[DeepSeekClient]
     label: str = "DeepSeek"
-    _active_index: int = 0
-    _lock: threading.Lock = field(default_factory=threading.Lock)
+    switch_logger: Callable[[str], None] | None = None
+    warning_logger: Callable[[str], None] | None = None
 
     @property
     def model(self) -> str:
@@ -227,6 +251,7 @@ class DeepSeekFailoverClient:
                 context_before=context_before,
                 context_after=context_after,
                 paper_guide=paper_guide,
+                warning_logger=self.warning_logger,
             ),
         )
 
@@ -234,18 +259,15 @@ class DeepSeekFailoverClient:
         if not self.clients:
             raise DeepSeekError(f"{self.label} has no configured clients")
 
-        start = self._get_active_index()
         errors: list[str] = []
-        for offset in range(len(self.clients)):
-            index = (start + offset) % len(self.clients)
-            client = self.clients[index]
+        for index, client in enumerate(self.clients):
             try:
                 result = operation(client)
             except DeepSeekError as exc:
                 errors.append(f"#{index + 1} model={client.model}: {exc}")
-                self._set_active_index((index + 1) % len(self.clients))
+                if index + 1 < len(self.clients):
+                    self._log_switch(index, client, exc)
                 continue
-            self._set_active_index(index)
             return result
 
         raise DeepSeekError(
@@ -253,18 +275,24 @@ class DeepSeekFailoverClient:
             + " | ".join(errors)
         )
 
-    def _get_active_index(self) -> int:
-        with self._lock:
-            return self._active_index % len(self.clients)
-
-    def _set_active_index(self, index: int) -> None:
-        with self._lock:
-            self._active_index = index % len(self.clients)
+    def _log_switch(self, index: int, client: DeepSeekClient, exc: DeepSeekError) -> None:
+        if self.switch_logger is None:
+            return
+        self.switch_logger(
+            f"{self.label}: config #{index + 1} "
+            f"{_base_url_host(client.base_url)} model={client.model} failed; "
+            f"trying config #{index + 2}. reason: {_short_error(exc)}"
+        )
 
 
 def validate_translation_response(content: str, source_fragment: str = "") -> str:
     """Reject wrapper text that would make translation output unsafe."""
 
+    validate_translation_protocol(content)
+    return content
+
+
+def validate_translation_protocol(content: str) -> None:
     if content.strip().startswith("```"):
         raise DeepSeekError(
             "DeepSeek translation returned a markdown fence instead of raw LaTeX",
@@ -278,15 +306,13 @@ def validate_translation_response(content: str, source_fragment: str = "") -> st
             retryable=True,
             protocol_violation=True,
         )
+
+
+def find_untranslated_english_warning(content: str, source_fragment: str) -> str:
     untranslated = _find_untranslated_english_prose(content)
     if untranslated and _source_has_english_prose(source_fragment):
-        raise DeepSeekError(
-            "DeepSeek translation left a long English prose span untranslated: "
-            f"{untranslated[:160]}",
-            retryable=True,
-            protocol_violation=True,
-        )
-    return content
+        return untranslated[:160]
+    return ""
 
 
 def _find_untranslated_english_prose(content: str) -> str:
@@ -310,6 +336,34 @@ def _remove_skip_check_environments(content: str) -> str:
             flags=re.DOTALL,
         )
     return content
+
+
+def _base_url_host(base_url: str) -> str:
+    rest = base_url.split("://", 1)[1] if "://" in base_url else base_url
+    return rest.split("/", 1)[0]
+
+
+def _short_error(exc: DeepSeekError) -> str:
+    message = " ".join(str(exc).split())
+    if len(message) > 180:
+        return message[:177] + "..."
+    return message
+
+
+def _warn_untranslated_accepted(
+    warning_logger: Callable[[str], None] | None,
+    model: str,
+    base_url: str,
+    untranslated: str,
+) -> None:
+    if warning_logger is None:
+        return
+    warning_logger(
+        "warning: accepted translation after repeated untranslated-English "
+        f"warnings on {_base_url_host(base_url)} model={model}. "
+        f"span: {untranslated[:160]}"
+    )
+
 
 def _retry_delay(exc: DeepSeekError, attempt: int) -> int:
     if exc.status_code == 429:

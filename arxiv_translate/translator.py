@@ -10,7 +10,13 @@ from pathlib import Path
 
 from .deepseek import DeepSeekClient, DeepSeekFailoverClient, validate_translation_response
 from .errors import DeepSeekError
-from .tex import should_translate_tex, split_latex_for_translation, strip_latex_comments
+from .tex import (
+    protect_latex_text_boxes,
+    restore_latex_text_boxes,
+    should_translate_tex,
+    split_latex_for_translation,
+    strip_latex_comments,
+)
 
 DEFAULT_CHUNK_CHARS = 2048
 DEFAULT_CONTEXT_CHARS = 250
@@ -67,27 +73,31 @@ def translate_tex_tree(
         if path.is_file() and path.suffix.lower() in {".tex", ".ltx"}
     ]
 
-    jobs: list[tuple[Path, str, list[str]]] = []
+    jobs: list[tuple[Path, str, list[str], list[str]]] = []
     for path in tex_files:
         raw = path.read_text(encoding="utf-8", errors="ignore")
         original = strip_latex_comments(raw)
         if original != raw:
             path.write_text(original, encoding="utf-8", newline="")
-        if not should_translate_tex(original):
+        protected_original, protected_text_boxes = protect_latex_text_boxes(original)
+        if not should_translate_tex(protected_original):
             continue
 
-        chunks = split_latex_for_translation(original, chunk_chars)
+        chunks = split_latex_for_translation(protected_original, chunk_chars)
         if chunks:
-            jobs.append((path, original, chunks))
+            jobs.append((path, protected_original, chunks, protected_text_boxes))
 
     done_chunks = 0
-    total_chunks = sum(len(chunks) for _, _, chunks in jobs)
+    total_chunks = sum(len(chunks) for _, _, chunks, _ in jobs)
     outputs: dict[Path, list[str | None]] = {
-        path: [None] * len(chunks) for path, _, chunks in jobs
+        path: [None] * len(chunks) for path, _, chunks, _ in jobs
+    }
+    text_box_blocks: dict[Path, list[str]] = {
+        path: blocks for path, _, _, blocks in jobs
     }
     work_items: list[tuple[Path, int, str, str, str, DeepSeekLike]] = []
 
-    for path, original, chunks in jobs:
+    for path, original, chunks, _ in jobs:
         offset = 0
         for index, chunk in enumerate(chunks):
             context_before = original[max(0, offset - context_chars) : offset]
@@ -137,10 +147,14 @@ def translate_tex_tree(
             if progress is not None:
                 progress(done_chunks, total_chunks, path.name)
 
-    for path, _, _ in jobs:
+    for path, _, _, _ in jobs:
         out = outputs[path]
-        path.write_text(
+        translated_text = restore_latex_text_boxes(
             "".join(part or "" for part in out),
+            text_box_blocks[path],
+        )
+        path.write_text(
+            translated_text,
             encoding="utf-8",
             newline="",
         )

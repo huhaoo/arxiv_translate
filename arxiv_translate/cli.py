@@ -335,7 +335,12 @@ def _build_deepseek_failover_client(
         )
         for index, config in enumerate(configs, start=1)
     ]
-    return DeepSeekFailoverClient(clients, label=label)
+    return DeepSeekFailoverClient(
+        clients,
+        label=label,
+        switch_logger=lambda message: print(f"      {message}"),
+        warning_logger=lambda message: print(f"      {message}"),
+    )
 
 
 def _normalize_translated_pdf(pdf_path: Path, translated_dir: Path) -> Path:

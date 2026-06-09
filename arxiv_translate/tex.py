@@ -16,6 +16,16 @@ BEGIN_ENV_RE = re.compile(r"\\begin\{([^}]+)\}")
 END_ENV_RE = re.compile(r"\\end\{([^}]+)\}")
 TITLE_COMMAND_RE = re.compile(r"(?<!\\)\\title\b")
 PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{")
+TEXT_BOX_COMMANDS = {
+    "fbox": 1,
+    "framebox": 1,
+    "makebox": 1,
+    "colorbox": 2,
+    "fcolorbox": 3,
+    "parbox": 2,
+    "tcbox": 1,
+}
+PROTECTED_TEXT_BOX_RE = re.compile(r"\\AXTProtectedTextBox\s*\{\s*(\d+)\s*\}")
 
 
 def discover_main_tex(root: Path, explicit: str | None = None) -> Path:
@@ -90,6 +100,90 @@ def strip_latex_comments(text: str) -> str:
         output.append(stripped)
         _update_verbatim_stack(stripped, verbatim_stack)
     return "".join(output)
+
+
+def protect_latex_text_boxes(text: str) -> tuple[str, list[str]]:
+    """Replace boxed text regions with placeholders before translation."""
+
+    spans = _find_text_box_spans(text)
+    if not spans:
+        return text, []
+
+    protected: list[str] = []
+    blocks: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        protected.append(text[cursor:start])
+        blocks.append(text[start:end])
+        protected.append(rf"\AXTProtectedTextBox{{{len(blocks) - 1}}}")
+        cursor = end
+    protected.append(text[cursor:])
+    return "".join(protected), blocks
+
+
+def restore_latex_text_boxes(text: str, blocks: list[str]) -> str:
+    """Restore placeholders created by protect_latex_text_boxes."""
+
+    if not blocks:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 0 <= index < len(blocks):
+            return blocks[index]
+        return match.group(0)
+
+    return PROTECTED_TEXT_BOX_RE.sub(replace, text)
+
+
+def _find_text_box_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "\\":
+            index += 1
+            continue
+        match = re.match(r"\\([A-Za-z]+)\*?", text[index:])
+        if match is None:
+            index += 1
+            continue
+        command = match.group(1)
+        required_args = TEXT_BOX_COMMANDS.get(command)
+        if required_args is None:
+            index += len(match.group(0))
+            continue
+        end = _parse_box_command_end(text, index + len(match.group(0)), required_args)
+        if end is None:
+            index += len(match.group(0))
+            continue
+        spans.append((index, end))
+        index = end
+    return spans
+
+
+def _parse_box_command_end(text: str, start: int, required_args: int) -> int | None:
+    index = start
+    required_seen = 0
+    while index < len(text):
+        index = _skip_whitespace(text, index)
+        if index >= len(text):
+            return None
+        if text[index] == "[":
+            end = _find_balanced_end(text, index, "[", "]")
+            if end is None:
+                return None
+            index = end
+            continue
+        if text[index] != "{":
+            return None
+        end = _find_balanced_end(text, index, "{", "}")
+        if end is None:
+            return None
+        required_seen += 1
+        index = end
+        if required_seen >= required_args:
+            return index
+    return None
 
 
 def ensure_english_pdf_title(
