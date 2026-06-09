@@ -411,12 +411,15 @@ def _translation_request(
         "<PREVIOUS_CONTEXT>\n"
         f"{context_before}\n"
         "</PREVIOUS_CONTEXT>\n\n"
+        "<NEXT_CONTEXT>\n"
+        f"{context_after}\n"
+        "</NEXT_CONTEXT>\n\n"
         "<CURRENT_FRAGMENT>\n"
         f"{fragment}\n"
         "</CURRENT_FRAGMENT>\n\n"
-        "<NEXT_CONTEXT>\n"
-        f"{context_after}\n"
-        "</NEXT_CONTEXT>"
+        "Return only the raw LaTeX translation of <CURRENT_FRAGMENT> above. "
+        "Do not output, translate, summarize, or repeat any content from "
+        "<PAPER_TRANSLATION_GUIDE>, <PREVIOUS_CONTEXT>, or <NEXT_CONTEXT>."
     )
 
 

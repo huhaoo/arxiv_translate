@@ -215,7 +215,7 @@ def _cache_key(
             "context_after": context_after,
             "paper_guide": paper_guide,
             "model": model,
-            "prompt": "latex-guide-context-v2",
+            "prompt": "latex-guide-context-v3",
         },
         ensure_ascii=False,
         sort_keys=True,
