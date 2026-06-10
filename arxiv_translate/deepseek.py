@@ -18,6 +18,7 @@ UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
 )
+ENGLISH_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z'-]{2,}\b")
 SKIP_UNTRANSLATED_CHECK_ENVIRONMENTS = {
     "alltt",
     "filecontents",
@@ -316,15 +317,41 @@ def find_untranslated_english_warning(content: str, source_fragment: str) -> str
 
 
 def _find_untranslated_english_prose(content: str) -> str:
-    checked = _remove_skip_check_environments(content)
-    checked = re.sub(r"\\(?:url|href)\s*\{[^{}]*\}", " ", checked)
-    checked = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?", " ", checked)
+    checked = _normalize_for_untranslated_check(content)
     match = UNTRANSLATED_ENGLISH_RE.search(checked)
-    return match.group(0) if match else ""
+    if match:
+        return match.group(0)
+    return _find_english_heavy_visible_span(checked)
 
 
 def _source_has_english_prose(source_fragment: str) -> bool:
-    return bool(UNTRANSLATED_ENGLISH_RE.search(_remove_skip_check_environments(source_fragment)))
+    return bool(_find_untranslated_english_prose(source_fragment))
+
+
+def _normalize_for_untranslated_check(content: str) -> str:
+    checked = _remove_skip_check_environments(content)
+    checked = re.sub(
+        r"\$\$.*?\$\$|\$.*?\$|\\\[.*?\\\]|\\\(.*?\\\)",
+        " ",
+        checked,
+        flags=re.DOTALL,
+    )
+    checked = re.sub(
+        r"\\(?:cite|citep|citet|citealp|ref|eqref|cref|Cref|autoref|label|url|href|includegraphics|input|include|bibliography)\*?(?:\[[^\]]*\])?(?:\{[^{}]*\}){1,2}",
+        " ",
+        checked,
+    )
+    checked = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?", " ", checked)
+    checked = re.sub(r"[{}~^_\\]+", " ", checked)
+    return checked
+
+
+def _find_english_heavy_visible_span(content: str) -> str:
+    for segment in re.split(r"[\u3400-\u9fff]+", content):
+        words = ENGLISH_WORD_RE.findall(segment)
+        if len(words) >= 16 and len(segment.strip()) >= 120:
+            return " ".join(words[:24])
+    return ""
 
 
 def _remove_skip_check_environments(content: str) -> str:

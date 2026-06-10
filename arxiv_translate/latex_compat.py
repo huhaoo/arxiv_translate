@@ -105,6 +105,7 @@ def guard_pdftex_compatibility_for_xelatex(
 ) -> str:
     """Guard common pdfTeX-only preamble commands before XeLaTeX compilation."""
 
+    text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
     text = downgrade_unaligned_align_environments(text)
     text = remove_blank_lines_in_math_environments(text)
@@ -242,6 +243,62 @@ def replace_px_units_with_pt(text: str) -> str:
     """Replace CSS-style px length units with TeX-supported pt units."""
 
     return re.sub(r"(?P<number>-?\d+(?:\.\d+)?)\s*px\b", r"\g<number>pt", text)
+
+
+def escape_unescaped_numeric_percentages(text: str) -> str:
+    """Escape bare percent signs in numeric percentages accidentally emitted by translation."""
+
+    output: list[str] = []
+    for line in text.splitlines(keepends=True):
+        output.append(_escape_numeric_percentages_in_line(line))
+    return "".join(output)
+
+
+def _escape_numeric_percentages_in_line(line: str) -> str:
+    output: list[str] = []
+    for index, char in enumerate(line):
+        if char == "%" and _should_escape_numeric_percent(line, index):
+            while output and output[-1] in " \t":
+                output.pop()
+            output.append(r"\%")
+        else:
+            output.append(char)
+    return "".join(output)
+
+
+def _should_escape_numeric_percent(line: str, index: int) -> bool:
+    if _is_escaped(line, index):
+        return False
+
+    previous = index - 1
+    while previous >= 0 and line[previous] in " \t":
+        previous -= 1
+    if previous < 0 or not line[previous].isdigit():
+        return False
+
+    next_index = index + 1
+    while next_index < len(line) and line[next_index] in " \t":
+        next_index += 1
+    if next_index >= len(line) or line[next_index] in "\r\n":
+        return True
+
+    next_char = line[next_index]
+    return (
+        next_char.isalnum()
+        or next_char in "([{（"
+        or next_char in ")]}）"
+        or next_char in ".,;:!?，。；：！？、"
+        or ord(next_char) > 127
+    )
+
+
+def _is_escaped(text: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
 
 
 def close_unclosed_preamble_single_line_commands(text: str) -> str:

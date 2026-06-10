@@ -16,6 +16,9 @@ BEGIN_ENV_RE = re.compile(r"\\begin\{([^}]+)\}")
 END_ENV_RE = re.compile(r"\\end\{([^}]+)\}")
 TITLE_COMMAND_RE = re.compile(r"(?<!\\)\\title\b")
 PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{")
+HYPERREF_PACKAGE_RE = re.compile(
+    r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{hyperref\}(?P<tail>\s*(?:%.*)?)$"
+)
 TEXT_BOX_COMMANDS = {
     "fbox": 1,
     "framebox": 1,
@@ -199,7 +202,7 @@ def ensure_english_pdf_title(
     updated = translated
     pdf_title_assignment = extract_pdf_title_assignment(original)
     if pdf_title_assignment is None and fallback_title:
-        pdf_title_assignment = f"Title={{{escape_latex_title_text(fallback_title)}}}"
+        pdf_title_assignment = f"pdftitle={{{escape_latex_title_text(fallback_title)}}}"
     if pdf_title_assignment is not None:
         updated = replace_pdf_title_assignment(updated, pdf_title_assignment)
 
@@ -256,8 +259,22 @@ def extract_pdf_title_assignment(text: str) -> str | None:
 def replace_pdf_title_assignment(text: str, title_assignment: str) -> str:
     span = _find_pdf_title_assignment_span(text)
     if span is None:
-        return text
+        return insert_pdf_title_assignment(text, title_assignment)
     return text[: span[0]] + title_assignment + text[span[1] :]
+
+
+def insert_pdf_title_assignment(text: str, title_assignment: str) -> str:
+    hypersetup = f"\\hypersetup{{{title_assignment}}}\n"
+    hyperref_match = HYPERREF_PACKAGE_RE.search(text)
+    if hyperref_match is not None:
+        return text[: hyperref_match.end()] + "\n" + hypersetup + text[hyperref_match.end() :]
+
+    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
+    if begin_document is None:
+        return text
+
+    insertion = "\\usepackage{hyperref}\n" + hypersetup
+    return text[: begin_document.start()] + insertion + text[begin_document.start() :]
 
 
 def escape_latex_title_text(title: str) -> str:
