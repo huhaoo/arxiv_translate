@@ -23,24 +23,12 @@ def extract_source(archive_path: Path, output_dir: Path) -> list[Path]:
     if raw.startswith(b"%PDF"):
         raise SourceUnavailableError("downloaded source is a PDF, not TeX source")
 
-    if _try_extract_tar(archive_path, output_dir):
-        return _require_tex_files(output_dir)
-
-    if zipfile.is_zipfile(archive_path):
-        with zipfile.ZipFile(archive_path) as zf:
-            for member in zf.infolist():
-                target = _safe_target(output_dir, member.filename)
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+    if _extract_tar(archive_path, output_dir) or _extract_zip(archive_path, output_dir):
         return _require_tex_files(output_dir)
 
     if _looks_gzip(raw):
         inflated = gzip.decompress(raw)
-        if _try_extract_tar_bytes(inflated, output_dir):
+        if _extract_tar_bytes(inflated, output_dir):
             return _require_tex_files(output_dir)
         _write_single_source(inflated, output_dir)
         return _require_tex_files(output_dir)
@@ -49,7 +37,7 @@ def extract_source(archive_path: Path, output_dir: Path) -> list[Path]:
     return _require_tex_files(output_dir)
 
 
-def _try_extract_tar(archive_path: Path, output_dir: Path) -> bool:
+def _extract_tar(archive_path: Path, output_dir: Path) -> bool:
     try:
         with tarfile.open(archive_path, mode="r:*") as tf:
             _extract_tar_safely(tf, output_dir)
@@ -58,7 +46,7 @@ def _try_extract_tar(archive_path: Path, output_dir: Path) -> bool:
         return False
 
 
-def _try_extract_tar_bytes(raw: bytes, output_dir: Path) -> bool:
+def _extract_tar_bytes(raw: bytes, output_dir: Path) -> bool:
     try:
         with tarfile.open(fileobj=BytesIO(raw), mode="r:*") as tf:
             _extract_tar_safely(tf, output_dir)
@@ -67,20 +55,37 @@ def _try_extract_tar_bytes(raw: bytes, output_dir: Path) -> bool:
         return False
 
 
+def _extract_zip(archive_path: Path, output_dir: Path) -> bool:
+    if not zipfile.is_zipfile(archive_path):
+        return False
+    with zipfile.ZipFile(archive_path) as zf:
+        for member in zf.infolist():
+            if member.is_dir():
+                _safe_target(output_dir, member.filename).mkdir(parents=True, exist_ok=True)
+                continue
+            with zf.open(member) as src:
+                _copy_member(src, output_dir, member.filename)
+    return True
+
+
 def _extract_tar_safely(tf: tarfile.TarFile, output_dir: Path) -> None:
     for member in tf.getmembers():
-        target = _safe_target(output_dir, member.name)
         if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
+            _safe_target(output_dir, member.name).mkdir(parents=True, exist_ok=True)
             continue
         if not member.isfile():
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
         source = tf.extractfile(member)
-        if source is None:
-            continue
-        with source, target.open("wb") as dst:
-            shutil.copyfileobj(source, dst)
+        if source is not None:
+            with source:
+                _copy_member(source, output_dir, member.name)
+
+
+def _copy_member(source, output_dir: Path, member_name: str) -> None:
+    target = _safe_target(output_dir, member_name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as dst:
+        shutil.copyfileobj(source, dst)
 
 
 def _safe_target(root: Path, member_name: str) -> Path:

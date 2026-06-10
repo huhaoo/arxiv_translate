@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import threading
 from collections.abc import Callable
@@ -87,6 +88,7 @@ def translate_tex_tree(
         if chunks:
             jobs.append((path, protected_original, chunks, protected_text_boxes))
 
+    appendix_paths = _appendix_included_paths(root, {path: original for path, original, _, _ in jobs})
     done_chunks = 0
     total_chunks = sum(len(chunks) for _, _, chunks, _ in jobs)
     outputs: dict[Path, list[str | None]] = {
@@ -112,6 +114,7 @@ def translate_tex_tree(
                 len(chunk),
                 client,
                 appendix_client,
+                path.resolve() in appendix_paths,
             )
             work_items.append(
                 (path, index, chunk, context_before, context_after, chunk_client)
@@ -229,15 +232,36 @@ def _client_for_chunk(
     chunk_length: int,
     main_client: DeepSeekLike,
     appendix_client: DeepSeekLike | None,
+    is_appendix_file: bool = False,
 ) -> DeepSeekLike:
     if appendix_client is None:
         return main_client
-    if _is_appendix_path(path):
+    if is_appendix_file or _is_appendix_path(path):
         return appendix_client
     appendix_start = original.find(r"\appendix")
     if appendix_start != -1 and offset + chunk_length > appendix_start:
         return appendix_client
     return main_client
+
+
+def _appendix_included_paths(root: Path, texts: dict[Path, str]) -> set[Path]:
+    appendix_paths: set[Path] = set()
+    for path, text in texts.items():
+        appendix_start = text.find(r"\appendix")
+        if appendix_start == -1:
+            continue
+        appendix_paths.update(_resolve_inputs(root, path.parent, text[appendix_start:]))
+    return appendix_paths
+
+
+def _resolve_inputs(root: Path, base: Path, text: str) -> set[Path]:
+    paths: set[Path] = set()
+    for match in re.finditer(r"\\(?:input|include)\s*\{([^{}]+)\}", text):
+        name = match.group(1).strip()
+        candidates = [base / name, root / name]
+        candidates += [path.with_suffix(".tex") for path in candidates if not path.suffix]
+        paths.update(path.resolve() for path in candidates if path.exists())
+    return paths
 
 
 def _is_appendix_path(path: Path) -> bool:

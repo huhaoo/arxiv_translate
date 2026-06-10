@@ -258,23 +258,18 @@ def extract_pdf_title_assignment(text: str) -> str | None:
 
 def replace_pdf_title_assignment(text: str, title_assignment: str) -> str:
     span = _find_pdf_title_assignment_span(text)
-    if span is None:
-        return insert_pdf_title_assignment(text, title_assignment)
-    return text[: span[0]] + title_assignment + text[span[1] :]
+    if span is not None:
+        return text[: span[0]] + title_assignment + text[span[1] :]
 
-
-def insert_pdf_title_assignment(text: str, title_assignment: str) -> str:
     hypersetup = f"\\hypersetup{{{title_assignment}}}\n"
-    hyperref_match = HYPERREF_PACKAGE_RE.search(text)
-    if hyperref_match is not None:
-        return text[: hyperref_match.end()] + "\n" + hypersetup + text[hyperref_match.end() :]
+    match = HYPERREF_PACKAGE_RE.search(text)
+    if match is not None:
+        return text[: match.end()] + "\n" + hypersetup + text[match.end() :]
 
-    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
-    if begin_document is None:
+    match = re.search(r"(?<!\\)\\begin\{document\}", text)
+    if match is None:
         return text
-
-    insertion = "\\usepackage{hyperref}\n" + hypersetup
-    return text[: begin_document.start()] + insertion + text[begin_document.start() :]
+    return text[: match.start()] + "\\usepackage{hyperref}\n" + hypersetup + text[match.start() :]
 
 
 def escape_latex_title_text(title: str) -> str:
