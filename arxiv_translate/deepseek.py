@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .errors import DeepSeekError
+from .preserved_terms import format_preserved_terms_for_prompt, strip_preserved_terms
 
 INTERNAL_PROMPT_TAG_RE = re.compile(
     r"</?(?:CURRENT_FRAGMENT|PREVIOUS_CONTEXT|NEXT_CONTEXT|PAPER_TRANSLATION_GUIDE)\s*>"
@@ -330,6 +331,7 @@ def _source_has_english_prose(source_fragment: str) -> bool:
 
 def _normalize_for_untranslated_check(content: str) -> str:
     checked = _remove_skip_check_environments(content)
+    checked = strip_preserved_terms(checked)
     checked = re.sub(
         r"\$\$.*?\$\$|\$.*?\$|\\\[.*?\\\]|\\\(.*?\\\)",
         " ",
@@ -405,6 +407,7 @@ def _translation_request(
     paper_guide: str = "",
     retry_warning: str = "",
 ) -> str:
+    preserved_terms = format_preserved_terms_for_prompt()
     retry_block = ""
     if retry_warning:
         retry_block = (
@@ -423,6 +426,7 @@ def _translation_request(
         "The optional <PREVIOUS_CONTEXT> and <NEXT_CONTEXT> blocks are reference "
         "context only. Do not translate them, do not output them, and do not repeat "
         "their content in the answer.\n"
+        f"Keep these technical terms in English exactly when they appear as terms: {preserved_terms}.\n"
         "Translate every visible English prose sentence in <CURRENT_FRAGMENT>; "
         "do not leave an English paragraph or sentence in the output unless it is "
         "code, a URL, a citation key, a file path, a model name, or LaTeX metadata "
@@ -451,10 +455,12 @@ def _translation_request(
 
 
 def _guide_request(latex_document: str) -> str:
+    preserved_terms = format_preserved_terms_for_prompt()
     return (
         "Create a concise translation guide for this complete LaTeX paper.\n"
         "Use the following exact Markdown headings and keep the guide practical for later chunk translation.\n"
         "Do not translate the paper itself.\n\n"
+        f"The following technical terms must remain in English when they appear as terms: {preserved_terms}.\n\n"
         "Required output format:\n"
         "# Paper Translation Guide\n"
         "## One-Sentence Topic\n"

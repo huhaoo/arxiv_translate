@@ -1,0 +1,42 @@
+# Preserved Terms
+
+These technical terms must stay in English during translation unless you intentionally edit this list.
+
+- `token`
+- `scaling law`
+- `prompt`
+- `in-context learning`
+- `zero-shot`
+- `few-shot`
+- `chain-of-thought`
+- `RLHF`
+- `DPO`
+- `KV cache`
+- `RAG`
+- `LoRA`
+- `QLoRA`
+- `AI safety`
+- `alignment tax`
+- `specification gaming`
+- `reward hacking`
+- `goal misgeneralization`
+- `sandbagging`
+- `scheming`
+- `power-seeking`
+- `sycophancy`
+- `jailbreak`
+- `prompt injection`
+- `red teaming`
+- `safety eval`
+- `capability eval`
+- `mechanistic interpretability`
+- `out-of-distribution`
+- `OOD`
+- `constitutional AI`
+- `model autonomy`
+- `scalable oversight`
+- `alignment faking`
+- `corrigibility`
+- `eliciting latent knowledge`
+- `ELK`
+- `Transformer`

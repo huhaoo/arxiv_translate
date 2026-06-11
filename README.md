@@ -96,6 +96,7 @@ python -m arxiv_translate https://arxiv.org/html/2401.00001 --keep-source-archiv
 分块只会在段落边界切分。如果单个段落长度超过分块大小，会保持该段落完整，不会在段落中间切开。
 
 在分块翻译之前，工具会先把完整 TeX 源码发送给 `deepseek_guide_model`，并缓存一份简洁的 `paper-guide.md`，其中包含论文结构、术语表、风格规则和 LaTeX 注意事项。后续翻译请求会在动态上下文前附加这份固定指南，以提高术语一致性和缓存命中率。
+默认保留英文的术语维护在 `arxiv_translate/preserved_terms.md`，例如 `token`、`scaling law`。如果你希望某些术语始终不要翻译，直接把它们按同样格式追加到这个文件里即可。
 
 输出结构：
 
