@@ -186,7 +186,10 @@ def _translate_chunk(
     cached = cache.get(cache_key)
     if cached is not None:
         try:
-            return path, index, validate_translation_response(cached, source_fragment=chunk)
+            validated = validate_translation_response(cached, source_fragment=chunk)
+            if validated != cached:
+                cache.put(cache_key, validated)
+            return path, index, validated
         except DeepSeekError:
             pass
 

@@ -4,6 +4,7 @@ import argparse
 import shlex
 import sys
 import threading
+from collections import Counter
 from pathlib import Path
 
 from .arxiv import download_pdf, download_source, parse_arxiv_id
@@ -29,9 +30,28 @@ from .translator import (
 )
 
 TRANSLATED_PDF_NAME = "translate.pdf"
+TRANSLATION_WARNINGS_NAME = "translation-warnings.log"
 INTERACTIVE_HISTORY_PATH = Path(".arxiv_translate_history")
 _PROGRESS_LOCK = threading.Lock()
 _PROGRESS_LINE_LENGTH = 0
+
+
+class _TranslationWarningCollector:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._warnings: list[str] = []
+
+    def add(self, message: str) -> None:
+        with self._lock:
+            self._warnings.append(message)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._warnings)
+
+    def snapshot(self) -> list[str]:
+        with self._lock:
+            return list(self._warnings)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -181,6 +201,7 @@ def run(args: argparse.Namespace) -> int:
     original_pdf_path = job_dir / "original.pdf"
     endnote_path = job_dir / "endnote.enw"
     guide_path = job_dir / "paper-guide.md"
+    warning_collector = _TranslationWarningCollector()
 
     if not args.redo and _is_completed_job(job_dir, no_compile=args.no_compile):
         print(f"[1/6] arXiv id: {arxiv_id}")
@@ -237,12 +258,14 @@ def run(args: argparse.Namespace) -> int:
         model_key="deepseek_model",
         timeout=args.timeout,
         label="DeepSeek main",
+        warning_logger=warning_collector.add,
     )
     appendix_client = _build_deepseek_failover_client(
         configs,
         model_key="deepseek_appendix_model",
         timeout=args.timeout,
         label="DeepSeek appendix",
+        warning_logger=warning_collector.add,
     )
     translated_files = translate_tex_tree(
         translated_dir,
@@ -277,6 +300,7 @@ def run(args: argparse.Namespace) -> int:
         print("[6/6] writing EndNote import file")
         write_endnote_import(metadata, endnote_path, [original_pdf_path])
         _print_file_output("endnote", endnote_path)
+        _print_translation_warnings(warning_collector, job_dir)
         return 0
 
     print("[5/6] compiling translated PDF")
@@ -293,6 +317,7 @@ def run(args: argparse.Namespace) -> int:
         [original_pdf_path, translated_pdf_path],
     )
     _print_done(endnote_path)
+    _print_translation_warnings(warning_collector, job_dir)
     return 0
 
 
@@ -320,6 +345,7 @@ def _build_deepseek_failover_client(
     model_key: str,
     timeout: int,
     label: str,
+    warning_logger=None,
 ) -> DeepSeekFailoverClient:
     clients = [
         DeepSeekClient(
@@ -339,7 +365,7 @@ def _build_deepseek_failover_client(
         clients,
         label=label,
         switch_logger=lambda message: print(f"      {message}"),
-        warning_logger=lambda message: print(f"      {message}"),
+        warning_logger=warning_logger,
     )
 
 
@@ -360,6 +386,44 @@ def _print_file_output(label: str, path: Path, base: Path | None = None) -> None
 def _print_done(path: Path) -> None:
     print(f"done: {_display_path(path)}")
     print(f"link: {path_uri(path)}")
+
+
+def _print_translation_warnings(
+    collector: _TranslationWarningCollector,
+    job_dir: Path,
+) -> None:
+    warnings = collector.snapshot()
+    warning_path = job_dir / TRANSLATION_WARNINGS_NAME
+    if not warnings:
+        warning_path.unlink(missing_ok=True)
+        return
+
+    counts = Counter(_warning_kind(message) for message in warnings)
+    lines = [
+        "Translation warnings",
+        "====================",
+        "",
+        f"Total: {len(warnings)}",
+        "",
+        "Summary:",
+    ]
+    lines.extend(f"- {kind}: {count}" for kind, count in sorted(counts.items()))
+    lines.extend(["", "Details:"])
+    lines.extend(f"[{index}] {message}" for index, message in enumerate(warnings, start=1))
+    warning_path.parent.mkdir(parents=True, exist_ok=True)
+    warning_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    summary = ", ".join(
+        f"{count} {kind}" for kind, count in sorted(counts.items())
+    )
+    print(f"warnings: {len(warnings)} warning(s): {summary}")
+    print(f"warning log: {_display_path(warning_path)}")
+    print(f"link: {path_uri(warning_path)}")
+
+
+def _warning_kind(message: str) -> str:
+    message = message.removeprefix("warning: ").strip()
+    return message.split(" on ", 1)[0].strip() or "warning"
 
 
 def _display_path(path: Path, base: Path | None = None) -> str:

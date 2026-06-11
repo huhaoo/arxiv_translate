@@ -89,6 +89,7 @@ def ensure_latex_compatibility(root: Path) -> list[Path]:
         fixed = guard_pdftex_compatibility_for_xelatex(
             text,
             zero_arg_macro_names=zero_arg_macro_names,
+            escape_numeric_percentages=path.suffix.lower() in {".tex", ".ltx"},
         )
         if uses_double_stroke_fix:
             fixed = replace_bbm_with_dsfont_for_xelatex(fixed, replace_macros=True)
@@ -102,10 +103,12 @@ def guard_pdftex_compatibility_for_xelatex(
     text: str,
     *,
     zero_arg_macro_names: set[str] | None = None,
+    escape_numeric_percentages: bool = True,
 ) -> str:
     """Guard common pdfTeX-only preamble commands before XeLaTeX compilation."""
 
-    text = escape_unescaped_numeric_percentages(text)
+    if escape_numeric_percentages:
+        text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
     text = downgrade_unaligned_align_environments(text)
     text = remove_blank_lines_in_math_environments(text)

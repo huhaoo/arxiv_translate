@@ -19,6 +19,7 @@ UNTRANSLATED_ENGLISH_RE = re.compile(
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
 )
 ENGLISH_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z'-]{2,}\b")
+DISPLAY_MATH_ENVIRONMENTS = "align\\*?|equation\\*?|gather\\*?|multline\\*?|split"
 SKIP_UNTRANSLATED_CHECK_ENVIRONMENTS = {
     "alltt",
     "filecontents",
@@ -68,6 +69,7 @@ Preserve exactly:
 - All LaTeX commands and environment names, including backslashes, braces, optional arguments, and command order.
 - Labels, refs, citations, bibliography keys, anchors, counters, and cross-reference identifiers.
 - Math expressions and math environments: $...$, $$...$$, \\(...\\), \\[...\\], equation, align, gather, multline, cases, array, matrix, theorem-like math displays, and all math symbols.
+- Never insert $...$ delimiters inside an existing display math environment such as equation, align, gather, multline, split, or cases. Keep symbols like i \\in x_t directly in that math environment.
 - Graphics, file paths, URLs, package names, class names, option names, and input/include targets.
 - Table structure: &, \\\\, \\hline, \\cline, \\multicolumn, \\multirow, column specs, alignment markers, and row/column counts.
 - Code and verbatim-like content: verbatim, lstlisting, minted, alltt, algorithmic code lines, shell commands, programming identifiers, and code comments inside code blocks.
@@ -149,8 +151,12 @@ class DeepSeekClient:
                 "temperature": self.temperature,
             }
             try:
-                content = self._post(payload)
-                validate_translation_protocol(content)
+                content = validate_translation_response(
+                    self._post(payload),
+                    source_fragment=fragment,
+                    warning_logger=warning_logger,
+                    warning_context=f"{_base_url_host(self.base_url)} model={self.model}",
+                )
                 untranslated = find_untranslated_english_warning(content, fragment)
                 if not untranslated:
                     return content
@@ -286,11 +292,23 @@ class DeepSeekFailoverClient:
         )
 
 
-def validate_translation_response(content: str, source_fragment: str = "") -> str:
+def validate_translation_response(
+    content: str,
+    source_fragment: str = "",
+    warning_logger: Callable[[str], None] | None = None,
+    warning_context: str = "",
+) -> str:
     """Reject wrapper text that would make translation output unsafe."""
 
     validate_translation_protocol(content)
-    return content
+    fixed, count = repair_nested_dollars_in_display_math(content)
+    if count and warning_logger is not None:
+        suffix = f" on {warning_context}" if warning_context else ""
+        warning_logger(
+            "warning: repaired nested dollar delimiters inside display math "
+            f"environments{suffix}. count: {count}"
+        )
+    return fixed
 
 
 def validate_translation_protocol(content: str) -> None:
@@ -307,6 +325,27 @@ def validate_translation_protocol(content: str) -> None:
             retryable=True,
             protocol_violation=True,
         )
+
+
+def repair_nested_dollars_in_display_math(content: str) -> tuple[str, int]:
+    """Remove accidental $ delimiters inserted inside existing display math."""
+
+    count = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal count
+        environment = match.group(1)
+        body, fixes = re.subn(r"(?<!\\)\$", "", match.group(2))
+        count += fixes
+        return f"\\begin{{{environment}}}{body}\\end{{{environment}}}"
+
+    fixed = re.sub(
+        rf"\\begin\{{({DISPLAY_MATH_ENVIRONMENTS})\}}(.*?)\\end\{{\1\}}",
+        replace,
+        content,
+        flags=re.DOTALL,
+    )
+    return fixed, count
 
 
 def find_untranslated_english_warning(content: str, source_fragment: str) -> str:
