@@ -39,3 +39,5 @@ These technical terms must stay in English during translation unless you intenti
 - `eliciting latent knowledge`
 - `ELK`
 - `Transformer`
+- `agent`
+- `agentic`

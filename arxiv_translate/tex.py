@@ -21,13 +21,27 @@ HYPERREF_PACKAGE_RE = re.compile(
 )
 BEGIN_DOCUMENT_RE = re.compile(r"(?<!\\)\\begin\{document\}")
 NATBIB_STYLE_SNIPPET = (
+    "% arxiv-translate: superscript numeric citations\n"
     "\\makeatletter\n"
     "\\@ifpackageloaded{natbib}{%\n"
-    "  \\setcitestyle{numbers,sort&compress,super,open={[},close={]}}%\n"
+    "  \\citestyle{numeric}%\n"
+    "  \\setcitestyle{numbers,sort&compress}%\n"
+    "  \\renewcommand{\\cite}[1]{\\textsuperscript{[\\citealp{#1}]}}%\n"
+    "  \\renewcommand{\\citep}[1]{\\textsuperscript{[\\citealp{#1}]}}%\n"
+    "  \\renewcommand{\\citet}[1]{\\textsuperscript{[\\citealp{#1}]}}%\n"
     "}{%\n"
+    "  \\def\\citepunct{, }%\n"
+    "  \\def\\citedash{--}%\n"
+    "  \\let\\@axtoldcite\\cite%\n"
+    "  \\def\\cite{\\@ifnextchar[{\\@axtcite}{\\@axtcite[]}}%\n"
+    "  \\def\\@axtcite[#1]#2{\\textsuperscript{\\@axtoldcite[#1]{#2}}}%\n"
     "}\n"
     "\\makeatother\n"
 )
+NATBIB_AUTHORYEAR_REPLACEMENTS = {
+    r"\setcitestyle{authoryear,round,citesep={;},aysep={,},yysep={;}}": r"\setcitestyle{numbers,sort&compress}",
+    r"\citestyle{authoryear}": r"\citestyle{numeric}",
+}
 TEXT_BOX_COMMANDS = {
     "fbox": 1,
     "framebox": 1,
@@ -287,10 +301,60 @@ def ensure_english_pdf_title(
     return True
 
 
+_CITE_CMD = r"\\cite(?:p|t|alp|alt|author|year|yearpar)?\*?(?:\[[^\]]*\])?\{([^{}]*)\}"
+_ADJACENT_CITE_PAIR_RE = re.compile(
+    rf"(?P<first>{_CITE_CMD})"
+    rf"(?P<sep>\s*(?:[,;，；、]\s*)?(?:and|or|和|与|及|以及|或|或者)?\s*)"
+    rf"(?P<second>{_CITE_CMD})"
+)
+
+
+def merge_adjacent_citations(text: str) -> str:
+    """Merge adjacent \\cite-like commands so they render in a single bracket.
+
+    \\cite{a}\\cite{b}   ->  \\cite{a,b}
+    \\cite{a}, \\cite{b}  ->  \\cite{a,b}
+    \\citep{a} \\citet{b} ->  \\cite{a,b}
+    """
+
+    def _merge(match: re.Match[str]) -> str:
+        keys1 = match.group(2).strip()
+        keys2 = match.group(5).strip()
+        merged_keys = f"{keys1},{keys2}" if keys1 and keys2 else (keys1 or keys2)
+        return r"\cite{" + merged_keys + "}"
+
+    changed = True
+    while changed:
+        new_text = _ADJACENT_CITE_PAIR_RE.sub(_merge, text)
+        changed = new_text != text
+        text = new_text
+    return text
+
+
+def merge_adjacent_citations_in_dir(root: Path) -> list[Path]:
+    """Run merge_adjacent_citations on every .tex / .ltx file under *root*.
+
+    Returns the list of files that were modified.
+    """
+
+    updated: list[Path] = []
+    for pattern in ("*.tex", "*.ltx"):
+        for path in root.rglob(pattern):
+            original = path.read_text(encoding="utf-8", errors="ignore")
+            merged = merge_adjacent_citations(original)
+            if merged == original:
+                continue
+            path.write_text(merged, encoding="utf-8", newline="")
+            updated.append(path)
+    return updated
+
+
 def ensure_superscript_numeric_citations(main_tex: Path) -> bool:
     """Prefer superscript numeric natbib citations like ^[1,2]."""
 
     text = main_tex.read_text(encoding="utf-8", errors="ignore")
+    if "% arxiv-translate: superscript numeric citations" in text:
+        return False
     if r"\setcitestyle{numbers,sort&compress,super,open={[},close={]}}" in text:
         return False
 
@@ -303,6 +367,23 @@ def ensure_superscript_numeric_citations(main_tex: Path) -> bool:
         return False
     main_tex.write_text(updated, encoding="utf-8", newline="")
     return True
+
+
+def ensure_numeric_natbib_styles(root: Path) -> list[Path]:
+    """Normalize natbib style files so templates do not force author-year citations."""
+
+    updated_files: list[Path] = []
+    for pattern in ("*.sty", "*.cls"):
+        for path in root.rglob(pattern):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            updated = text
+            for source, target in NATBIB_AUTHORYEAR_REPLACEMENTS.items():
+                updated = updated.replace(source, target)
+            if updated == text:
+                continue
+            path.write_text(updated, encoding="utf-8", newline="")
+            updated_files.append(path)
+    return updated_files
 
 
 def extract_latex_title_command(text: str) -> str | None:

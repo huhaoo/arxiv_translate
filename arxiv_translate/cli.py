@@ -21,7 +21,9 @@ from .paths import DEFAULT_OUTPUT_DIR, make_job_dir
 from .tex import (
     discover_main_tex,
     ensure_english_pdf_title,
+    ensure_numeric_natbib_styles,
     ensure_superscript_numeric_citations,
+    merge_adjacent_citations_in_dir,
 )
 from .translator import (
     DEFAULT_CHUNK_CHARS,
@@ -82,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--redo",
         action="store_true",
-        help="rerun even if a completed output already exists",
+        help="rerun the full workflow from scratch even if cached outputs already exist",
     )
     parser.add_argument(
         "--timeout",
@@ -186,12 +188,11 @@ def run(args: argparse.Namespace) -> int:
     endnote_path = job_dir / "endnote.enw"
     guide_path = job_dir / "paper-guide.md"
 
-    if not args.redo and _is_completed_job(job_dir, no_compile=args.no_compile):
-        print(f"[1/6] arXiv id: {arxiv_id}")
-        print(f"done: existing completed output found at {_display_path(job_dir)}")
-        print(f"      link: {path_uri(job_dir)}")
-        print("      use --redo to run the full workflow again")
-        return 0
+    resume_from_translated = (
+        not args.redo
+        and _is_completed_job(job_dir, no_compile=args.no_compile)
+        and _can_resume_from_translated(source_dir, translated_dir)
+    )
 
     if args.redo:
         (job_dir / "translation-cache.json").unlink(missing_ok=True)
@@ -204,68 +205,85 @@ def run(args: argparse.Namespace) -> int:
     print(f"[1/6] arXiv id: {arxiv_id}")
     metadata = fetch_arxiv_metadata(arxiv_id)
     print(f"      title: {metadata.title}")
-    print(f"[2/6] downloading original PDF: {_display_path(job_dir)}")
-    download_pdf(arxiv_id, original_pdf_path)
-    _print_file_output("original PDF", original_pdf_path, job_dir)
+    if resume_from_translated:
+        print(f"[2/6] reusing existing original PDF: {_display_path(job_dir)}")
+        _print_file_output("original PDF", original_pdf_path, job_dir)
+        print("[3/6] reusing extracted TeX source")
+        tex_files = list(source_dir.rglob("*.tex")) + list(source_dir.rglob("*.ltx"))
+        print(f"      found {len(tex_files)} TeX file(s)")
+        original_main_tex = discover_main_tex(source_dir, args.main)
+        print("[4/6] reusing translated TeX files after DeepSeek")
+        translated_files = list(translated_dir.rglob("*.tex")) + list(translated_dir.rglob("*.ltx"))
+        print(f"      translated {len(translated_files)} file(s) already present")
+    else:
+        print(f"[2/6] downloading original PDF: {_display_path(job_dir)}")
+        download_pdf(arxiv_id, original_pdf_path)
+        _print_file_output("original PDF", original_pdf_path, job_dir)
 
-    print("[3/6] downloading and extracting TeX source")
-    try:
-        download_source(arxiv_id, archive_path)
-        tex_files = extract_source(archive_path, source_dir)
-    except SourceUnavailableError as exc:
-        print(f"      TeX source unavailable: {exc}")
-        print("[4/6] skipped translation")
-        print("[5/6] skipped compilation")
-        print("[6/6] writing EndNote import file")
-        write_endnote_import(metadata, endnote_path, [original_pdf_path])
-        _print_done(endnote_path)
-        return 0
+        print("[3/6] downloading and extracting TeX source")
+        try:
+            download_source(arxiv_id, archive_path)
+            tex_files = extract_source(archive_path, source_dir)
+        except SourceUnavailableError as exc:
+            print(f"      TeX source unavailable: {exc}")
+            print("[4/6] skipped translation")
+            print("[5/6] skipped compilation")
+            print("[6/6] writing EndNote import file")
+            write_endnote_import(metadata, endnote_path, [original_pdf_path])
+            _print_done(endnote_path)
+            return 0
 
-    if not args.keep_source_archive:
-        archive_path.unlink(missing_ok=True)
-    print(f"      found {len(tex_files)} TeX file(s)")
-    original_main_tex = discover_main_tex(source_dir, args.main)
+        if not args.keep_source_archive:
+            archive_path.unlink(missing_ok=True)
+        print(f"      found {len(tex_files)} TeX file(s)")
+        original_main_tex = discover_main_tex(source_dir, args.main)
 
-    print("[4/6] generating guide and translating TeX files with DeepSeek")
-    prepare_translated_tree(source_dir, translated_dir)
-    guide_client = _build_deepseek_failover_client(
-        configs,
-        model_key="deepseek_guide_model",
-        timeout=args.timeout,
-        label="DeepSeek guide",
-    )
-    paper_guide = load_or_generate_paper_guide(source_dir, guide_path, guide_client)
-    _print_file_output("paper guide", guide_path, job_dir)
-    client = _build_deepseek_failover_client(
-        configs,
-        model_key="deepseek_model",
-        timeout=args.timeout,
-        label="DeepSeek main",
-    )
-    appendix_client = _build_deepseek_failover_client(
-        configs,
-        model_key="deepseek_appendix_model",
-        timeout=args.timeout,
-        label="DeepSeek appendix",
-    )
-    translated_files = translate_tex_tree(
-        translated_dir,
-        client=client,
-        cache=cache,
-        chunk_chars=args.chunk_chars,
-        context_chars=args.context_chars,
-        parallel_chunks=args.parallel_chunks,
-        paper_guide=paper_guide,
-        appendix_client=appendix_client,
-        progress=_print_translation_progress,
-    )
-    print(f"      translated {len(translated_files)} file(s)")
+        print("[4/6] generating guide and translating TeX files with DeepSeek")
+        prepare_translated_tree(source_dir, translated_dir)
+        guide_client = _build_deepseek_failover_client(
+            configs,
+            model_key="deepseek_guide_model",
+            timeout=args.timeout,
+            label="DeepSeek guide",
+        )
+        paper_guide = load_or_generate_paper_guide(source_dir, guide_path, guide_client)
+        _print_file_output("paper guide", guide_path, job_dir)
+        client = _build_deepseek_failover_client(
+            configs,
+            model_key="deepseek_model",
+            timeout=args.timeout,
+            label="DeepSeek main",
+        )
+        appendix_client = _build_deepseek_failover_client(
+            configs,
+            model_key="deepseek_appendix_model",
+            timeout=args.timeout,
+            label="DeepSeek appendix",
+        )
+        translated_files = translate_tex_tree(
+            translated_dir,
+            client=client,
+            cache=cache,
+            chunk_chars=args.chunk_chars,
+            context_chars=args.context_chars,
+            parallel_chunks=args.parallel_chunks,
+            paper_guide=paper_guide,
+            appendix_client=appendix_client,
+            progress=_print_translation_progress,
+        )
+        print(f"      translated {len(translated_files)} file(s)")
 
     main_tex = discover_main_tex(translated_dir, args.main)
+    merged_files = merge_adjacent_citations_in_dir(translated_dir)
+    if merged_files:
+        print(f"      citations: merged adjacent cites in {len(merged_files)} file(s)")
     if ensure_english_pdf_title(main_tex, original_main_tex, metadata.title):
         print("      title: kept original English title")
     if ensure_superscript_numeric_citations(main_tex):
         print("      citations: switched to superscript numeric style")
+    natbib_style_files = ensure_numeric_natbib_styles(translated_dir)
+    if natbib_style_files:
+        print(f"      citations: normalized natbib styles in {len(natbib_style_files)} template file(s)")
 
     compatibility_files = ensure_latex_compatibility(translated_dir)
     if compatibility_files:
@@ -390,6 +408,10 @@ def _is_completed_job(job_dir: Path, no_compile: bool = False) -> bool:
     return not _contains_tex_files(job_dir / "source") and not _contains_tex_files(
         job_dir / "translated"
     )
+
+
+def _can_resume_from_translated(source_dir: Path, translated_dir: Path) -> bool:
+    return _contains_tex_files(source_dir) and _contains_tex_files(translated_dir)
 
 
 def _contains_tex_files(path: Path) -> bool:
