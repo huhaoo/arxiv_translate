@@ -19,6 +19,29 @@ PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{"
 HYPERREF_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{hyperref\}(?P<tail>\s*(?:%.*)?)$"
 )
+BEGIN_DOCUMENT_RE = re.compile(r"(?<!\\)\\begin\{document\}")
+NATBIB_STYLE_SNIPPET = (
+    "% arxiv-translate: superscript numeric citations\n"
+    "\\makeatletter\n"
+    "\\@ifpackageloaded{natbib}{%\n"
+    "  \\citestyle{numeric}%\n"
+    "  \\setcitestyle{numbers,sort&compress}%\n"
+    "  \\renewcommand{\\cite}[1]{\\textsuperscript{[\\citealp{#1}]}}%\n"
+    "  \\renewcommand{\\citep}[1]{\\textsuperscript{[\\citealp{#1}]}}%\n"
+    "  \\renewcommand{\\citet}[1]{\\textsuperscript{[\\citealp{#1}]}}%\n"
+    "}{%\n"
+    "  \\def\\citepunct{, }%\n"
+    "  \\def\\citedash{--}%\n"
+    "  \\let\\@axtoldcite\\cite%\n"
+    "  \\def\\cite{\\@ifnextchar[{\\@axtcite}{\\@axtcite[]}}%\n"
+    "  \\def\\@axtcite[#1]#2{\\textsuperscript{\\@axtoldcite[#1]{#2}}}%\n"
+    "}\n"
+    "\\makeatother\n"
+)
+NATBIB_AUTHORYEAR_REPLACEMENTS = {
+    r"\setcitestyle{authoryear,round,citesep={;},aysep={,},yysep={;}}": r"\setcitestyle{numbers,sort&compress}",
+    r"\citestyle{authoryear}": r"\citestyle{numeric}",
+}
 TEXT_BOX_COMMANDS = {
     "fbox": 1,
     "framebox": 1,
@@ -27,6 +50,19 @@ TEXT_BOX_COMMANDS = {
     "fcolorbox": 3,
     "parbox": 2,
     "tcbox": 1,
+}
+GLOSSARY_KEY_COMMANDS = {
+    "term": 1,
+    "gls": 1,
+    "Gls": 1,
+    "glspl": 1,
+    "Glspl": 1,
+    "acrshort": 1,
+    "Acrshort": 1,
+    "acrfull": 1,
+    "Acrfull": 1,
+    "acrshortpl": 1,
+    "Acrshortpl": 1,
 }
 PROTECTED_TEXT_BOX_RE = re.compile(r"\\AXTProtectedTextBox\s*\{\s*(\d+)\s*\}")
 
@@ -106,9 +142,9 @@ def strip_latex_comments(text: str) -> str:
 
 
 def protect_latex_text_boxes(text: str) -> tuple[str, list[str]]:
-    """Replace boxed text regions with placeholders before translation."""
+    """Replace fragile LaTeX regions with placeholders before translation."""
 
-    spans = _find_text_box_spans(text)
+    spans = _merge_spans(_find_text_box_spans(text) + _find_glossary_key_spans(text))
     if not spans:
         return text, []
 
@@ -164,7 +200,36 @@ def _find_text_box_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _find_glossary_key_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "\\":
+            index += 1
+            continue
+        match = re.match(r"\\([A-Za-z]+)\*?", text[index:])
+        if match is None:
+            index += 1
+            continue
+        command = match.group(1)
+        required_args = GLOSSARY_KEY_COMMANDS.get(command)
+        if required_args is None:
+            index += len(match.group(0))
+            continue
+        end = _parse_command_end(text, index + len(match.group(0)), required_args)
+        if end is None:
+            index += len(match.group(0))
+            continue
+        spans.append((index, end))
+        index = end
+    return spans
+
+
 def _parse_box_command_end(text: str, start: int, required_args: int) -> int | None:
+    return _parse_command_end(text, start, required_args)
+
+
+def _parse_command_end(text: str, start: int, required_args: int) -> int | None:
     index = start
     required_seen = 0
     while index < len(text):
@@ -187,6 +252,20 @@ def _parse_box_command_end(text: str, start: int, required_args: int) -> int | N
         if required_seen >= required_args:
             return index
     return None
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not spans:
+        return []
+    ordered = sorted(spans)
+    merged: list[list[int]] = [[ordered[0][0], ordered[0][1]]]
+    for start, end in ordered[1:]:
+        current = merged[-1]
+        if start <= current[1]:
+            current[1] = max(current[1], end)
+            continue
+        merged.append([start, end])
+    return [(start, end) for start, end in merged]
 
 
 def ensure_english_pdf_title(
@@ -222,6 +301,91 @@ def ensure_english_pdf_title(
     return True
 
 
+_CITE_CMD = r"\\cite(?:p|t|alp|alt|author|year|yearpar)?\*?(?:\[[^\]]*\])?\{([^{}]*)\}"
+_ADJACENT_CITE_PAIR_RE = re.compile(
+    rf"(?P<first>{_CITE_CMD})"
+    rf"(?P<sep>\s*(?:[,;，；、]\s*)?(?:and|or|和|与|及|以及|或|或者)?\s*)"
+    rf"(?P<second>{_CITE_CMD})"
+)
+
+
+def merge_adjacent_citations(text: str) -> str:
+    """Merge adjacent \\cite-like commands so they render in a single bracket.
+
+    \\cite{a}\\cite{b}   ->  \\cite{a,b}
+    \\cite{a}, \\cite{b}  ->  \\cite{a,b}
+    \\citep{a} \\citet{b} ->  \\cite{a,b}
+    """
+
+    def _merge(match: re.Match[str]) -> str:
+        keys1 = match.group(2).strip()
+        keys2 = match.group(5).strip()
+        merged_keys = f"{keys1},{keys2}" if keys1 and keys2 else (keys1 or keys2)
+        return r"\cite{" + merged_keys + "}"
+
+    changed = True
+    while changed:
+        new_text = _ADJACENT_CITE_PAIR_RE.sub(_merge, text)
+        changed = new_text != text
+        text = new_text
+    return text
+
+
+def merge_adjacent_citations_in_dir(root: Path) -> list[Path]:
+    """Run merge_adjacent_citations on every .tex / .ltx file under *root*.
+
+    Returns the list of files that were modified.
+    """
+
+    updated: list[Path] = []
+    for pattern in ("*.tex", "*.ltx"):
+        for path in root.rglob(pattern):
+            original = path.read_text(encoding="utf-8", errors="ignore")
+            merged = merge_adjacent_citations(original)
+            if merged == original:
+                continue
+            path.write_text(merged, encoding="utf-8", newline="")
+            updated.append(path)
+    return updated
+
+
+def ensure_superscript_numeric_citations(main_tex: Path) -> bool:
+    """Prefer superscript numeric natbib citations like ^[1,2]."""
+
+    text = main_tex.read_text(encoding="utf-8", errors="ignore")
+    if "% arxiv-translate: superscript numeric citations" in text:
+        return False
+    if r"\setcitestyle{numbers,sort&compress,super,open={[},close={]}}" in text:
+        return False
+
+    begin_document = BEGIN_DOCUMENT_RE.search(text)
+    if begin_document is None:
+        return False
+
+    updated = text[: begin_document.start()] + NATBIB_STYLE_SNIPPET + text[begin_document.start() :]
+    if updated == text:
+        return False
+    main_tex.write_text(updated, encoding="utf-8", newline="")
+    return True
+
+
+def ensure_numeric_natbib_styles(root: Path) -> list[Path]:
+    """Normalize natbib style files so templates do not force author-year citations."""
+
+    updated_files: list[Path] = []
+    for pattern in ("*.sty", "*.cls"):
+        for path in root.rglob(pattern):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            updated = text
+            for source, target in NATBIB_AUTHORYEAR_REPLACEMENTS.items():
+                updated = updated.replace(source, target)
+            if updated == text:
+                continue
+            path.write_text(updated, encoding="utf-8", newline="")
+            updated_files.append(path)
+    return updated_files
+
+
 def extract_latex_title_command(text: str) -> str | None:
     span = _find_latex_title_span(text)
     if span is None:
@@ -242,7 +406,7 @@ def replace_latex_title_command(
     if not insert_if_missing:
         return text
 
-    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
+    begin_document = BEGIN_DOCUMENT_RE.search(text)
     if begin_document:
         insertion = title_command.rstrip() + "\n"
         return text[: begin_document.start()] + insertion + text[begin_document.start() :]
@@ -266,7 +430,7 @@ def replace_pdf_title_assignment(text: str, title_assignment: str) -> str:
     if match is not None:
         return text[: match.end()] + "\n" + hypersetup + text[match.end() :]
 
-    match = re.search(r"(?<!\\)\\begin\{document\}", text)
+    match = BEGIN_DOCUMENT_RE.search(text)
     if match is None:
         return text
     return text[: match.start()] + "\\usepackage{hyperref}\n" + hypersetup + text[match.start() :]

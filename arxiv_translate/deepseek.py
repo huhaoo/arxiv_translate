@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .errors import DeepSeekError
+from .preferred_translations import format_preferred_translations_for_prompt
+from .preserved_terms import format_preserved_terms_for_prompt, strip_preserved_terms
 
 INTERNAL_PROMPT_TAG_RE = re.compile(
     r"</?(?:CURRENT_FRAGMENT|PREVIOUS_CONTEXT|NEXT_CONTEXT|PAPER_TRANSLATION_GUIDE)\s*>"
@@ -37,6 +39,7 @@ Analyze the complete paper source and produce a concise guide that will be prepe
 Follow these rules:
 - Do not translate the paper.
 - Do not include long quotations from the paper.
+- First identify the paper's primary field and likely subfield, then use that judgment to choose terminology, tone, and translation conventions.
 - Prefer stable, reusable guidance over paragraph-specific commentary.
 - If uncertain about a term, mark it as "keep English" or "needs context" instead of guessing.
 - Preserve all mathematical symbols, labels, citations, theorem names, author names, arXiv IDs, DOIs, package names, file names, and code identifiers.
@@ -98,6 +101,7 @@ class DeepSeekClient:
     timeout: int = 120
     temperature: float = 0.2
     retries: int = 3
+    untranslated_retries: int = 5
 
     def generate_paper_guide(self, latex_document: str) -> str:
         payload = {
@@ -166,7 +170,7 @@ class DeepSeekClient:
                     "The previous response left a long English prose span untranslated: "
                     f"{untranslated}"
                 )
-                if untranslated_warnings >= self.retries:
+                if untranslated_warnings >= self.untranslated_retries:
                     _warn_untranslated_accepted(
                         warning_logger,
                         self.model,
@@ -369,6 +373,7 @@ def _source_has_english_prose(source_fragment: str) -> bool:
 
 def _normalize_for_untranslated_check(content: str) -> str:
     checked = _remove_skip_check_environments(content)
+    checked = strip_preserved_terms(checked)
     checked = re.sub(
         r"\$\$.*?\$\$|\$.*?\$|\\\[.*?\\\]|\\\(.*?\\\)",
         " ",
@@ -444,6 +449,8 @@ def _translation_request(
     paper_guide: str = "",
     retry_warning: str = "",
 ) -> str:
+    preferred_translations = format_preferred_translations_for_prompt()
+    preserved_terms = format_preserved_terms_for_prompt()
     retry_block = ""
     if retry_warning:
         retry_block = (
@@ -459,9 +466,11 @@ def _translation_request(
         "They are not LaTeX and must never appear in your answer.\n"
         "If <PAPER_TRANSLATION_GUIDE> is provided, follow its terminology and style. "
         "The guide is reference material, not content to translate or output.\n"
+        f"When these technical terms appear as terms, use these preferred Chinese translations: {preferred_translations}.\n"
         "The optional <PREVIOUS_CONTEXT> and <NEXT_CONTEXT> blocks are reference "
         "context only. Do not translate them, do not output them, and do not repeat "
         "their content in the answer.\n"
+        f"Keep these technical terms in English exactly when they appear as terms: {preserved_terms}.\n"
         "Translate every visible English prose sentence in <CURRENT_FRAGMENT>; "
         "do not leave an English paragraph or sentence in the output unless it is "
         "code, a URL, a citation key, a file path, a model name, or LaTeX metadata "
@@ -490,12 +499,21 @@ def _translation_request(
 
 
 def _guide_request(latex_document: str) -> str:
+    preferred_translations = format_preferred_translations_for_prompt()
+    preserved_terms = format_preserved_terms_for_prompt()
     return (
         "Create a concise translation guide for this complete LaTeX paper.\n"
         "Use the following exact Markdown headings and keep the guide practical for later chunk translation.\n"
+        "First identify the paper's primary field and likely subfield, then use that domain judgment to improve terminology choices, tone, and what should remain in English.\n"
         "Do not translate the paper itself.\n\n"
+        f"Use these preferred Chinese translations when the English term appears as a technical term: {preferred_translations}.\n"
+        f"The following technical terms must remain in English when they appear as terms: {preserved_terms}.\n\n"
         "Required output format:\n"
         "# Paper Translation Guide\n"
+        "## Field And Subfield\n"
+        "- Primary field.\n"
+        "- Likely subfield or research area.\n"
+        "- Short note on how this affects translation terminology and style.\n"
         "## One-Sentence Topic\n"
         "A single sentence in Simplified Chinese describing the paper.\n"
         "## Structure\n"
@@ -503,11 +521,11 @@ def _guide_request(latex_document: str) -> str:
         "## Glossary\n"
         "| English term | Chinese translation | Notes |\n"
         "| --- | --- | --- |\n"
-        "Include core technical terms, theorem/result names, graph/math/statistical terms, and recurring phrases.\n"
+        "Include core technical terms, theorem/result names, graph/math/statistical terms, and recurring phrases. Reuse the preferred Chinese translations above whenever they apply.\n"
         "## Proper Nouns And Keep-English Items\n"
         "- Names, software/packages, datasets, commands, labels, symbols, and terms that should remain in English or LaTeX.\n"
         "## Style Rules\n"
-        "- Rules for tone, mathematical style, terminology consistency, and what not to translate.\n"
+        "- Rules for tone, mathematical style, terminology consistency, domain-specific wording, and what not to translate.\n"
         "## LaTeX Cautions\n"
         "- Specific macros, environments, code blocks, tables, figures, captions, or bibliography areas that require extra care.\n\n"
         "<COMPLETE_LATEX_SOURCE>\n"
