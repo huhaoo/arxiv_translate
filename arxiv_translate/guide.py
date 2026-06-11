@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .deepseek import DeepSeekClient, DeepSeekFailoverClient
+from .preferred_translations import append_preferred_translations_section
 from .preserved_terms import append_preserved_terms_section
 from .tex import strip_latex_comments
 
@@ -13,12 +14,16 @@ def load_or_generate_paper_guide(
     client: DeepSeekClient | DeepSeekFailoverClient,
 ) -> str:
     if guide_path.exists():
-        guide = append_preserved_terms_section(guide_path.read_text(encoding="utf-8"))
+        guide = guide_path.read_text(encoding="utf-8")
+        guide = append_preferred_translations_section(guide)
+        guide = append_preserved_terms_section(guide)
         guide_path.write_text(guide, encoding="utf-8", newline="\n")
         return guide
 
     latex_document = collect_latex_document(source_dir)
-    guide = append_preserved_terms_section(client.generate_paper_guide(latex_document))
+    guide = client.generate_paper_guide(latex_document)
+    guide = append_preferred_translations_section(guide)
+    guide = append_preserved_terms_section(guide)
     guide_path.parent.mkdir(parents=True, exist_ok=True)
     guide_path.write_text(guide, encoding="utf-8", newline="\n")
     return guide

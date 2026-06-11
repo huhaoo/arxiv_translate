@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .deepseek import DeepSeekClient, DeepSeekFailoverClient, validate_translation_response
 from .errors import DeepSeekError
+from .preferred_translations import load_preferred_translations
 from .preserved_terms import load_preserved_terms
 from .tex import (
     protect_latex_text_boxes,
@@ -216,8 +217,9 @@ def _cache_key(
             "context_after": context_after,
             "paper_guide": paper_guide,
             "model": model,
+            "preferred_translations": load_preferred_translations(),
             "preserved_terms": load_preserved_terms(),
-            "prompt": "latex-guide-context-v4",
+            "prompt": "latex-guide-context-v5",
         },
         ensure_ascii=False,
         sort_keys=True,

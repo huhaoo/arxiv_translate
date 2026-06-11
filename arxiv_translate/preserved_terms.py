@@ -4,7 +4,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-PRESERVED_TERMS_PATH = Path(__file__).with_name("preserved_terms.md")
+PRESERVED_TERMS_PATH = Path(__file__).with_name("terminology") / "preserved_terms.md"
 DEFAULT_PRESERVED_TERMS = (
     "token",
     "scaling law",

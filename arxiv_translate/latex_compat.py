@@ -88,6 +88,7 @@ def ensure_latex_compatibility(root: Path) -> list[Path]:
     for path, text in zip(tex_files, tree_texts):
         fixed = guard_pdftex_compatibility_for_xelatex(
             text,
+            file_suffix=path.suffix.lower(),
             zero_arg_macro_names=zero_arg_macro_names,
         )
         if uses_double_stroke_fix:
@@ -101,11 +102,13 @@ def ensure_latex_compatibility(root: Path) -> list[Path]:
 def guard_pdftex_compatibility_for_xelatex(
     text: str,
     *,
+    file_suffix: str = ".tex",
     zero_arg_macro_names: set[str] | None = None,
 ) -> str:
     """Guard common pdfTeX-only preamble commands before XeLaTeX compilation."""
 
-    text = escape_unescaped_numeric_percentages(text)
+    if file_suffix in {".tex", ".ltx"}:
+        text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
     text = downgrade_unaligned_align_environments(text)
     text = remove_blank_lines_in_math_environments(text)

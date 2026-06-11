@@ -29,7 +29,6 @@ These technical terms must stay in English during translation unless you intenti
 - `red teaming`
 - `safety eval`
 - `capability eval`
-- `mechanistic interpretability`
 - `out-of-distribution`
 - `OOD`
 - `constitutional AI`
