@@ -19,6 +19,15 @@ PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{"
 HYPERREF_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{hyperref\}(?P<tail>\s*(?:%.*)?)$"
 )
+BEGIN_DOCUMENT_RE = re.compile(r"(?<!\\)\\begin\{document\}")
+NATBIB_STYLE_SNIPPET = (
+    "\\makeatletter\n"
+    "\\@ifpackageloaded{natbib}{%\n"
+    "  \\setcitestyle{numbers,sort&compress,super,open={[},close={]}}%\n"
+    "}{%\n"
+    "}\n"
+    "\\makeatother\n"
+)
 TEXT_BOX_COMMANDS = {
     "fbox": 1,
     "framebox": 1,
@@ -27,6 +36,19 @@ TEXT_BOX_COMMANDS = {
     "fcolorbox": 3,
     "parbox": 2,
     "tcbox": 1,
+}
+GLOSSARY_KEY_COMMANDS = {
+    "term": 1,
+    "gls": 1,
+    "Gls": 1,
+    "glspl": 1,
+    "Glspl": 1,
+    "acrshort": 1,
+    "Acrshort": 1,
+    "acrfull": 1,
+    "Acrfull": 1,
+    "acrshortpl": 1,
+    "Acrshortpl": 1,
 }
 PROTECTED_TEXT_BOX_RE = re.compile(r"\\AXTProtectedTextBox\s*\{\s*(\d+)\s*\}")
 
@@ -106,9 +128,9 @@ def strip_latex_comments(text: str) -> str:
 
 
 def protect_latex_text_boxes(text: str) -> tuple[str, list[str]]:
-    """Replace boxed text regions with placeholders before translation."""
+    """Replace fragile LaTeX regions with placeholders before translation."""
 
-    spans = _find_text_box_spans(text)
+    spans = _merge_spans(_find_text_box_spans(text) + _find_glossary_key_spans(text))
     if not spans:
         return text, []
 
@@ -164,7 +186,36 @@ def _find_text_box_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _find_glossary_key_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "\\":
+            index += 1
+            continue
+        match = re.match(r"\\([A-Za-z]+)\*?", text[index:])
+        if match is None:
+            index += 1
+            continue
+        command = match.group(1)
+        required_args = GLOSSARY_KEY_COMMANDS.get(command)
+        if required_args is None:
+            index += len(match.group(0))
+            continue
+        end = _parse_command_end(text, index + len(match.group(0)), required_args)
+        if end is None:
+            index += len(match.group(0))
+            continue
+        spans.append((index, end))
+        index = end
+    return spans
+
+
 def _parse_box_command_end(text: str, start: int, required_args: int) -> int | None:
+    return _parse_command_end(text, start, required_args)
+
+
+def _parse_command_end(text: str, start: int, required_args: int) -> int | None:
     index = start
     required_seen = 0
     while index < len(text):
@@ -187,6 +238,20 @@ def _parse_box_command_end(text: str, start: int, required_args: int) -> int | N
         if required_seen >= required_args:
             return index
     return None
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not spans:
+        return []
+    ordered = sorted(spans)
+    merged: list[list[int]] = [[ordered[0][0], ordered[0][1]]]
+    for start, end in ordered[1:]:
+        current = merged[-1]
+        if start <= current[1]:
+            current[1] = max(current[1], end)
+            continue
+        merged.append([start, end])
+    return [(start, end) for start, end in merged]
 
 
 def ensure_english_pdf_title(
@@ -222,6 +287,24 @@ def ensure_english_pdf_title(
     return True
 
 
+def ensure_superscript_numeric_citations(main_tex: Path) -> bool:
+    """Prefer superscript numeric natbib citations like ^[1,2]."""
+
+    text = main_tex.read_text(encoding="utf-8", errors="ignore")
+    if r"\setcitestyle{numbers,sort&compress,super,open={[},close={]}}" in text:
+        return False
+
+    begin_document = BEGIN_DOCUMENT_RE.search(text)
+    if begin_document is None:
+        return False
+
+    updated = text[: begin_document.start()] + NATBIB_STYLE_SNIPPET + text[begin_document.start() :]
+    if updated == text:
+        return False
+    main_tex.write_text(updated, encoding="utf-8", newline="")
+    return True
+
+
 def extract_latex_title_command(text: str) -> str | None:
     span = _find_latex_title_span(text)
     if span is None:
@@ -242,7 +325,7 @@ def replace_latex_title_command(
     if not insert_if_missing:
         return text
 
-    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
+    begin_document = BEGIN_DOCUMENT_RE.search(text)
     if begin_document:
         insertion = title_command.rstrip() + "\n"
         return text[: begin_document.start()] + insertion + text[begin_document.start() :]
@@ -269,7 +352,7 @@ def insert_pdf_title_assignment(text: str, title_assignment: str) -> str:
     if hyperref_match is not None:
         return text[: hyperref_match.end()] + "\n" + hypersetup + text[hyperref_match.end() :]
 
-    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
+    begin_document = BEGIN_DOCUMENT_RE.search(text)
     if begin_document is None:
         return text
 

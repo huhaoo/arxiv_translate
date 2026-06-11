@@ -18,7 +18,11 @@ from .latex_compat import ensure_chinese_latex_support, ensure_latex_compatibili
 from .links import path_uri
 from .metadata import fetch_arxiv_metadata
 from .paths import DEFAULT_OUTPUT_DIR, make_job_dir
-from .tex import discover_main_tex, ensure_english_pdf_title
+from .tex import (
+    discover_main_tex,
+    ensure_english_pdf_title,
+    ensure_superscript_numeric_citations,
+)
 from .translator import (
     DEFAULT_CHUNK_CHARS,
     DEFAULT_CONTEXT_CHARS,
@@ -260,6 +264,8 @@ def run(args: argparse.Namespace) -> int:
     main_tex = discover_main_tex(translated_dir, args.main)
     if ensure_english_pdf_title(main_tex, original_main_tex, metadata.title):
         print("      title: kept original English title")
+    if ensure_superscript_numeric_citations(main_tex):
+        print("      citations: switched to superscript numeric style")
 
     compatibility_files = ensure_latex_compatibility(translated_dir)
     if compatibility_files:
