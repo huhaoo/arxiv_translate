@@ -282,7 +282,12 @@ def protect_zero_arg_macros_before_nonascii(
     if not names:
         return text
 
-    pattern = re.compile(rf"\\({'|'.join(re.escape(name) for name in sorted(names, key=len, reverse=True))})(?=[^\x00-\x7F])")
+    macro_pattern = "|".join(
+        re.escape(name) for name in sorted(names, key=len, reverse=True)
+    )
+    pattern = re.compile(
+        rf"\\({macro_pattern})(?:\\(?=[^\x00-\x7F])|(?=[^\x00-\x7F]))"
+    )
     output: list[str] = []
     for line in text.splitlines(keepends=True):
         if _is_macro_definition_line(line):
