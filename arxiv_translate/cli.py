@@ -120,6 +120,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="translate only; skip LaTeX compilation",
     )
     parser.add_argument(
+        "-S",
+        "--superscript-citations",
+        "--lightcite",
+        action="store_true",
+        help="convert citations to a compact superscript numeric style",
+    )
+    parser.add_argument(
         "--keep-source-archive",
         action="store_true",
         help="keep the raw arXiv source download in the output directory",
@@ -296,16 +303,20 @@ def run(args: argparse.Namespace) -> int:
         print(f"      translated {len(translated_files)} file(s)")
 
     main_tex = discover_main_tex(translated_dir, args.main)
-    merged_files = merge_adjacent_citations_in_dir(translated_dir)
-    if merged_files:
-        print(f"      citations: merged adjacent cites in {len(merged_files)} file(s)")
     if ensure_english_pdf_title(main_tex, original_main_tex, metadata.title):
         print("      title: kept original English title")
-    if ensure_superscript_numeric_citations(main_tex):
-        print("      citations: switched to superscript numeric style")
-    natbib_style_files = ensure_numeric_natbib_styles(translated_dir)
-    if natbib_style_files:
-        print(f"      citations: normalized natbib styles in {len(natbib_style_files)} template file(s)")
+    if args.superscript_citations:
+        merged_files = merge_adjacent_citations_in_dir(translated_dir)
+        if merged_files:
+            print(f"      citations: merged adjacent cites in {len(merged_files)} file(s)")
+        if ensure_superscript_numeric_citations(main_tex):
+            print("      citations: switched to superscript numeric style")
+        natbib_style_files = ensure_numeric_natbib_styles(translated_dir)
+        if natbib_style_files:
+            print(
+                "      citations: normalized natbib styles in "
+                f"{len(natbib_style_files)} template file(s)"
+            )
 
     compatibility_files = ensure_latex_compatibility(translated_dir)
     if compatibility_files:

@@ -68,10 +68,13 @@ python -m arxiv_translate https://arxiv.org/pdf/2401.00001.pdf --no-compile
 python -m arxiv_translate 2401.00001 --main paper.tex
 python -m arxiv_translate 2401.00001 --chunk-chars 2048 --context-chars 250 --parallel-chunks 8
 python -m arxiv_translate 2401.00001 --redo
+python -m arxiv_translate 2401.00001 --superscript-citations
 python -m arxiv_translate https://arxiv.org/html/2401.00001 --keep-source-archive
 ```
 
 如果输出目录中已经有完成结果，命令会在发起网络请求或 DeepSeek 请求前跳过这篇论文。使用 `--redo` 可以强制重新执行完整工作流。
+
+默认保留论文原有的引用命令和引用样式，不合并或改写引用。需要紧凑的数字上标引用时，使用 `--superscript-citations`；也可以使用别名 `--lightcite` 或短选项 `-S`。
 
 默认情况下，每次翻译请求会发送最多 2048 个字符的 TeX 分块，并附带前后各 250 个字符的上下文。提示词会要求 DeepSeek 只把上下文用于术语和连贯性，并且只输出当前分块的译文，不重复上下文内容。
 
