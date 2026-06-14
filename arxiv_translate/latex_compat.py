@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}")
@@ -14,6 +15,18 @@ MICROTYPE_PACKAGE_RE = re.compile(
 CJKUTF8_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?P<options>\[[^\]]*\])?\{CJKutf8\}(?P<tail>\s*(?:%.*)?)$"
 )
+PACKAGE_LOAD_RE = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)\\(?P<command>usepackage|RequirePackage)"
+    r"[ \t]*(?:\[(?P<options>[^\]]*)\])?[ \t]*"
+    r"\{(?P<packages>[^{}\r\n]+)\}"
+    r"(?P<tail>[ \t]*(?:%[^\r\n]*)?)(?P<newline>\r?\n|$)"
+)
+PASS_OPTIONS_RE = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)\\PassOptionsToPackage"
+    r"\{(?P<options>[^\r\n]*)\}\{(?P<package>[^{}\s,]+)\}"
+    r"(?P<tail>[ \t]*(?:%[^\r\n]*)?)(?P<newline>\r?\n|$)"
+)
+TEX_IF_RE = re.compile(r"^\\if[A-Za-z@]*(?=\s|\\|$)")
 PDFTEX_GUARDED_PDFOUTPUT_RE = re.compile(
     r"\\ifPDFTeX\s*\\pdfoutput\s*=\s*\d+\s*\\fi",
     re.DOTALL,
@@ -146,6 +159,7 @@ def guard_pdftex_compatibility_for_xelatex(
     if file_suffix in {".tex", ".ltx"}:
         text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
+    text = normalize_duplicate_package_loads(text)
     text = downgrade_unaligned_align_environments(text)
     text = remove_blank_lines_in_math_environments(text)
     text = replace_px_units_with_pt(text)
@@ -235,6 +249,183 @@ def remove_blank_lines_in_multiline_usepackage_options(text: str) -> str:
         if inside_usepackage_options and re.match(r"^\s*\]\s*\{[^}]+\}", line):
             inside_usepackage_options = False
     return "".join(output)
+
+
+def normalize_duplicate_package_loads(text: str) -> str:
+    """Deduplicate top-level package loads and pass later options up front."""
+
+    loads = _top_level_matches(text, PACKAGE_LOAD_RE, stop_at_document=True)
+    occurrences: dict[str, int] = {}
+    first_seen_order: list[str] = []
+    for match in loads:
+        for package in _package_names(match):
+            occurrences[package] = occurrences.get(package, 0) + 1
+            if package not in first_seen_order:
+                first_seen_order.append(package)
+
+    duplicates = {
+        package for package, occurrence_count in occurrences.items()
+        if occurrence_count > 1
+    }
+    if not duplicates:
+        return text
+
+    options_by_package: dict[str, list[str]] = {package: [] for package in duplicates}
+    for match in loads:
+        options = match.group("options") or ""
+        for package in _package_names(match):
+            if package in duplicates:
+                options_by_package[package].append(options)
+
+    seen: set[str] = set()
+    output: list[str] = []
+    cursor = 0
+    for match in loads:
+        packages = _package_names(match)
+        remaining: list[str] = []
+        changed = False
+        for package in packages:
+            if package not in duplicates or package not in seen:
+                remaining.append(package)
+                seen.add(package)
+            else:
+                changed = True
+
+        output.append(text[cursor : match.start()])
+        if not changed:
+            output.append(match.group(0))
+        elif remaining:
+            option_text = (
+                f"[{match.group('options')}]" if match.group("options") is not None else ""
+            )
+            output.append(
+                f"{match.group('indent')}\\{match.group('command')}{option_text}"
+                f"{{{','.join(remaining)}}}{match.group('tail')}"
+                f"{match.group('newline')}"
+            )
+        elif "%" in match.group("tail"):
+            output.append(
+                f"{match.group('indent')}{match.group('tail').lstrip()}"
+                f"{match.group('newline')}"
+            )
+        cursor = match.end()
+    output.append(text[cursor:])
+    text = "".join(output)
+
+    existing_options: dict[str, list[str]] = {}
+    for match in _top_level_matches(text, PASS_OPTIONS_RE):
+        package = match.group("package").strip()
+        existing_options.setdefault(package, []).append(match.group("options"))
+
+    pass_lines: list[str] = []
+    for package in first_seen_order:
+        if package not in duplicates:
+            continue
+        options = _ordered_package_options(options_by_package[package])
+        already_passed = set(
+            _ordered_package_options(existing_options.get(package, []))
+        )
+        missing = [option for option in options if option not in already_passed]
+        if missing:
+            pass_lines.append(
+                f"\\PassOptionsToPackage{{{','.join(missing)}}}{{{package}}}\n"
+            )
+
+    if not pass_lines:
+        return text
+
+    documentclass = DOCUMENTCLASS_RE.search(text)
+    if documentclass:
+        insertion_index = documentclass.start()
+    else:
+        remaining_loads = _top_level_matches(text, PACKAGE_LOAD_RE)
+        relevant_loads = [
+            match
+            for match in remaining_loads
+            if duplicates.intersection(_package_names(match))
+        ]
+        if not relevant_loads:
+            return text
+        insertion_index = relevant_loads[0].start()
+    return text[:insertion_index] + "".join(pass_lines) + text[insertion_index:]
+
+
+def _ordered_package_options(option_groups: Iterable[str]) -> list[str]:
+    options: list[str] = []
+    for group in option_groups:
+        for option in _split_top_level_commas(group):
+            option = option.strip()
+            if option and option not in options:
+                options.append(option)
+    return options
+
+
+def _package_names(match: re.Match[str]) -> list[str]:
+    return [
+        package.strip()
+        for package in match.group("packages").split(",")
+        if package.strip()
+    ]
+
+
+def _split_top_level_commas(value: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    escaped = False
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+        elif char in "{[(":
+            depth += 1
+        elif char in "}])":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(value[start:index])
+            start = index + 1
+    parts.append(value[start:])
+    return parts
+
+
+def _top_level_matches(
+    text: str,
+    pattern: re.Pattern[str],
+    *,
+    stop_at_document: bool = False,
+) -> list[re.Match[str]]:
+    depth_by_line = _conditional_depth_by_line(text)
+    document_start = text.find(r"\begin{document}") if stop_at_document else -1
+    return [
+        match
+        for match in pattern.finditer(text)
+        if (document_start == -1 or match.start() < document_start)
+        and depth_by_line.get(_line_start(text, match.start()), 0) == 0
+    ]
+
+
+def _conditional_depth_by_line(text: str) -> dict[int, int]:
+    depths: dict[int, int] = {}
+    depth = 0
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith(r"\fi") and (
+            len(stripped) == 3 or not stripped[3].isalpha()
+        ):
+            depth = max(0, depth - 1)
+        depths[offset] = depth
+        if TEX_IF_RE.match(stripped):
+            depth += 1
+        offset += len(line)
+    return depths
+
+
+def _line_start(text: str, index: int) -> int:
+    newline = text.rfind("\n", 0, index)
+    return 0 if newline == -1 else newline + 1
 
 
 def downgrade_unaligned_align_environments(text: str) -> str:

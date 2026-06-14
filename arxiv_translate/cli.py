@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import shlex
 import sys
 import threading
@@ -476,22 +478,67 @@ def _contains_tex_files(path: Path) -> bool:
 
 def _load_interactive_history(path: Path) -> list[str]:
     try:
-        return [
+        loaded = [
             line.strip()
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
     except FileNotFoundError:
         return []
+    history = _deduplicate_interactive_history(loaded)
+    if history != loaded:
+        _write_interactive_history(history, path)
+    return history
 
 
 def _append_interactive_history(history: list[str], item: str, path: Path) -> None:
-    if not item or (history and history[-1] == item):
+    item = item.strip()
+    if not item:
         return
+    item_key = _interactive_history_key(item)
+    history[:] = [
+        existing
+        for existing in history
+        if _interactive_history_key(existing) != item_key
+    ]
     history.append(item)
     del history[:-200]
+    _write_interactive_history(history, path)
+
+
+def _deduplicate_interactive_history(items: list[str]) -> list[str]:
+    seen: set[tuple[str, str]] = set()
+    deduplicated_reversed: list[str] = []
+    for item in reversed(items):
+        key = _interactive_history_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated_reversed.append(item)
+    return list(reversed(deduplicated_reversed))[-200:]
+
+
+def _interactive_history_key(item: str) -> tuple[str, str]:
+    try:
+        tokens = shlex.split(item)
+    except ValueError:
+        return ("command", item)
+
+    parser = build_parser()
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            args = parser.parse_args(tokens)
+        if args.link:
+            return ("arxiv", parse_arxiv_id(args.link))
+    except (ArxivTranslateError, SystemExit):
+        pass
+    return ("command", item)
+
+
+def _write_interactive_history(history: list[str], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(history) + "\n", encoding="utf-8")
+    content = "\n".join(history)
+    path.write_text(content + ("\n" if content else ""), encoding="utf-8")
 
 
 def _read_interactive_line(prompt: str, history: list[str]) -> str:

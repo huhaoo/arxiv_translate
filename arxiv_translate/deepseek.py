@@ -208,6 +208,7 @@ def validate_translation_response(
 
     validate_translation_protocol(content)
     fixed, count = repair_nested_dollars_in_display_math(content)
+    validate_latex_braces_balanced(fixed)
     if count and warning_logger is not None:
         suffix = f" on {warning_context}" if warning_context else ""
         warning_logger(
@@ -215,6 +216,38 @@ def validate_translation_response(
             f"environments{suffix}. count: {count}"
         )
     return fixed
+
+
+def validate_latex_braces_balanced(content: str) -> None:
+    """Reject unbalanced grouping braces while ignoring escaped visible braces."""
+
+    depth = 0
+    backslashes = 0
+    in_comment = False
+    for char in content:
+        if in_comment:
+            if char in "\r\n":
+                in_comment = False
+            continue
+        if char == "\\":
+            backslashes += 1
+            continue
+        escaped = backslashes % 2 == 1
+        if char == "%" and not escaped:
+            in_comment = True
+        elif char == "{" and not escaped:
+            depth += 1
+        elif char == "}" and not escaped:
+            depth -= 1
+            if depth < 0:
+                break
+        backslashes = 0
+    if depth != 0:
+        raise DeepSeekError(
+            "DeepSeek translation returned unbalanced LaTeX braces",
+            retryable=True,
+            protocol_violation=True,
+        )
 
 
 def validate_translation_protocol(content: str) -> None:
