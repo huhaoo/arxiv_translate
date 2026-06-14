@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .deepseek import DeepSeekClient, DeepSeekFailoverClient, validate_translation_response
+from .deepseek import DeepSeekClient, validate_translation_response
 from .errors import DeepSeekError
 from .preferred_translations import load_preferred_translations
 from .preserved_terms import load_preserved_terms
@@ -24,9 +24,6 @@ from .tex import (
 DEFAULT_CHUNK_CHARS = 2048
 DEFAULT_CONTEXT_CHARS = 250
 DEFAULT_PARALLEL_CHUNKS = 8
-DeepSeekLike = DeepSeekClient | DeepSeekFailoverClient
-
-
 class TranslationCache:
     def __init__(self, path: Path):
         self.path = path
@@ -58,13 +55,13 @@ def prepare_translated_tree(source_dir: Path, translated_dir: Path) -> None:
 
 def translate_tex_tree(
     root: Path,
-    client: DeepSeekLike,
+    client: DeepSeekClient,
     cache: TranslationCache,
     chunk_chars: int = DEFAULT_CHUNK_CHARS,
     context_chars: int = DEFAULT_CONTEXT_CHARS,
     parallel_chunks: int = DEFAULT_PARALLEL_CHUNKS,
     paper_guide: str = "",
-    appendix_client: DeepSeekLike | None = None,
+    appendix_client: DeepSeekClient | None = None,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> list[Path]:
     context_chars = max(0, context_chars)
@@ -99,7 +96,7 @@ def translate_tex_tree(
     text_box_blocks: dict[Path, list[str]] = {
         path: blocks for path, _, _, blocks in jobs
     }
-    work_items: list[tuple[Path, int, str, str, str, DeepSeekLike]] = []
+    work_items: list[tuple[Path, int, str, str, str, DeepSeekClient]] = []
 
     for path, original, chunks, _ in jobs:
         offset = 0
@@ -175,7 +172,7 @@ def _translate_chunk(
     context_before: str,
     context_after: str,
     paper_guide: str,
-    client: DeepSeekLike,
+    client: DeepSeekClient,
     cache: TranslationCache,
 ) -> tuple[Path, int, str]:
     cache_key = _cache_key(
@@ -237,10 +234,10 @@ def _client_for_chunk(
     original: str,
     offset: int,
     chunk_length: int,
-    main_client: DeepSeekLike,
-    appendix_client: DeepSeekLike | None,
+    main_client: DeepSeekClient,
+    appendix_client: DeepSeekClient | None,
     is_appendix_file: bool = False,
-) -> DeepSeekLike:
+) -> DeepSeekClient:
     if appendix_client is None:
         return main_client
     if is_appendix_file or _is_appendix_path(path):

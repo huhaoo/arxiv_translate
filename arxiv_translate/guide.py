@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .deepseek import DeepSeekClient, DeepSeekFailoverClient
+from .metadata import ArxivMetadata
 from .preferred_translations import append_preferred_translations_section
 from .preserved_terms import append_preserved_terms_section
 from .tex import strip_latex_comments
@@ -11,40 +11,37 @@ from .tex import strip_latex_comments
 LATEX_DOCUMENT_SUFFIXES = {".tex", ".ltx"}
 LATEX_DEFINITION_SUFFIXES = LATEX_DOCUMENT_SUFFIXES | {".sty", ".cls"}
 PREDEFINED_COMMANDS_HEADING = "## Predefined LaTeX Commands"
+SECTION_COMMAND_RE = re.compile(
+    r"\\(?P<level>part|chapter|section|subsection|subsubsection)\*?\s*\{"
+)
+PACKAGE_RE = re.compile(r"\\usepackage(?:\[[^\]]*\])?\{([^}]+)\}")
+DOCUMENT_CLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{([^}]+)\}")
+ENVIRONMENT_RE = re.compile(r"\\begin\{([^}]+)\}")
+LABEL_RE = re.compile(r"\\label\{([^}]+)\}")
+TITLE_RE = re.compile(
+    r"\\(?:title|icmltitle|papertitle|acltitle)(?:\[[^\]]*\])?\s*\{"
+)
 COMMAND_DEFINITION_RE = re.compile(
     r"\\(?P<kind>"
     r"newcommand|renewcommand|providecommand|DeclareRobustCommand|"
     r"DeclareMathOperator|def|gdef|edef|xdef|let"
     r")\*?(?![A-Za-z@])"
 )
-MATH_CONTEXT_RE = re.compile(
-    r"(?<!\\)\$\$(?:\\.|.)*?(?<!\\)\$\$"
-    r"|(?<![\\$])\$(?!\$)(?:\\.|[^$])+(?<!\\)\$(?!\$)"
-    r"|\\\((?:\\.|.)*?\\\)"
-    r"|\\\[(?:\\.|.)*?\\\]"
-    r"|\\begin\{(?:equation|align|gather|multline|split|cases)\*?\}"
-    r".*?"
-    r"\\end\{(?:equation|align|gather|multline|split|cases)\*?\}",
-    re.DOTALL,
+MATH_ENVIRONMENT_BEGIN_RE = re.compile(
+    r"\\begin\{(?P<name>equation|align|gather|multline|split|cases)(?P<star>\*)?\}"
 )
 
 
-def load_or_generate_paper_guide(
+def generate_template_paper_guide(
     source_dir: Path,
     guide_path: Path,
-    client: DeepSeekClient | DeepSeekFailoverClient,
+    metadata: ArxivMetadata | None = None,
 ) -> str:
-    predefined_commands = collect_predefined_latex_commands(source_dir)
-    if guide_path.exists():
-        guide = guide_path.read_text(encoding="utf-8")
-        guide = append_predefined_commands_section(guide, predefined_commands)
-        guide = append_preferred_translations_section(guide)
-        guide = append_preserved_terms_section(guide)
-        guide_path.write_text(guide, encoding="utf-8", newline="\n")
-        return guide
+    """Generate a deterministic translation guide without an API request."""
 
-    latex_document = collect_latex_document(source_dir)
-    guide = client.generate_paper_guide(latex_document)
+    source_texts = _collect_source_texts(source_dir)
+    predefined_commands = collect_predefined_latex_commands(source_dir)
+    guide = _render_template_guide(source_dir, source_texts, metadata)
     guide = append_predefined_commands_section(guide, predefined_commands)
     guide = append_preferred_translations_section(guide)
     guide = append_preserved_terms_section(guide)
@@ -53,15 +50,286 @@ def load_or_generate_paper_guide(
     return guide
 
 
-def collect_latex_document(source_dir: Path) -> str:
-    parts: list[str] = []
+def _collect_source_texts(source_dir: Path) -> dict[Path, str]:
+    texts: dict[Path, str] = {}
     for path in sorted(source_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in LATEX_DOCUMENT_SUFFIXES:
             continue
-        relative = path.relative_to(source_dir).as_posix()
-        text = strip_latex_comments(path.read_text(encoding="utf-8", errors="ignore"))
-        parts.append(f"<LATEX_FILE path=\"{relative}\">\n{text}\n</LATEX_FILE>")
-    return "\n\n".join(parts)
+        texts[path] = strip_latex_comments(
+            path.read_text(encoding="utf-8", errors="ignore")
+        )
+    return texts
+
+
+def _render_template_guide(
+    source_dir: Path,
+    source_texts: dict[Path, str],
+    metadata: ArxivMetadata | None,
+) -> str:
+    combined = "\n".join(source_texts.values())
+    source_title = _extract_first_braced_argument(combined, TITLE_RE)
+    title = (metadata.title if metadata and metadata.title else source_title) or ""
+    sections = _extract_sections(source_texts)
+    packages = _unique_sorted(
+        package.strip()
+        for match in PACKAGE_RE.finditer(combined)
+        for package in match.group(1).split(",")
+        if package.strip()
+    )
+    document_classes = _unique_sorted(
+        match.group(1).strip()
+        for match in DOCUMENT_CLASS_RE.finditer(combined)
+        if match.group(1).strip()
+    )
+    environments = _unique_sorted(
+        match.group(1).strip()
+        for match in ENVIRONMENT_RE.finditer(combined)
+        if match.group(1).strip()
+    )
+    labels = _unique_sorted(match.group(1).strip() for match in LABEL_RE.finditer(combined))
+    files = [
+        path.relative_to(source_dir).as_posix()
+        for path in sorted(source_texts)
+    ]
+
+    structure = "\n".join(
+        f"- `{level}`: `{_escape_markdown_code(heading)}`"
+        for level, heading in sections
+    ) or "- No explicit section commands were detected."
+    package_list = _inline_code_list(packages) or "None detected."
+    class_list = _inline_code_list(document_classes) or "None detected."
+    environment_list = _inline_code_list(environments) or "None detected."
+    file_list = "\n".join(f"- `{path}`" for path in files)
+    if not file_list:
+        file_list = "- No `.tex` or `.ltx` files were detected."
+
+    cautions = [
+        "- Preserve every LaTeX command, environment name, argument boundary, label, "
+        "citation key, file path, URL, and math expression exactly.",
+        "- Translate visible prose in headings, captions, theorem statements, table "
+        "cells, and list items while preserving their surrounding LaTeX structure.",
+        "- Keep the complete `\\title` command and PDF title metadata in English.",
+        "- Do not translate bibliography entries, code, verbatim-like environments, "
+        "package options, graphics paths, or input/include targets.",
+    ]
+    if any(env in environments for env in ("table", "table*", "tabular", "tabularx")):
+        cautions.append(
+            "- Tables are present: preserve `&`, `\\\\`, row counts, column specs, "
+            "`\\multicolumn`, and `\\multirow` structure."
+        )
+    if any(env in environments for env in ("figure", "figure*", "subfigure")):
+        cautions.append(
+            "- Figures are present: translate caption prose only; preserve graphics "
+            "paths, labels, placement options, and sizing commands."
+        )
+    if any(
+        env in environments
+        for env in ("algorithm", "algorithmic", "lstlisting", "minted", "verbatim")
+    ):
+        cautions.append(
+            "- Algorithms or code-like blocks are present: preserve code, identifiers, "
+            "keywords, indentation, and line structure."
+        )
+    if labels:
+        cautions.append(
+            f"- Cross-references are present ({len(labels)} labels detected): never "
+            "translate label or reference identifiers."
+        )
+
+    metadata_sections = _render_arxiv_metadata_sections(metadata)
+    title_item = (
+        f"- Original title: `{_escape_markdown_code(title)}`\n"
+        if title
+        else ""
+    )
+
+    return (
+        "# Paper Translation Guide\n\n"
+        "This guide is generated locally from the LaTeX source and available arXiv "
+        "metadata. It does not infer unstated claims or send the complete paper to an "
+        "external model.\n\n"
+        f"{metadata_sections}"
+        "## Structure\n"
+        f"{structure}\n\n"
+        "## Glossary\n"
+        "| English term | Chinese translation | Notes |\n"
+        "| --- | --- | --- |\n"
+        "| See Preferred Fixed Translations below | Use the configured translation | "
+        "Apply consistently throughout the paper |\n"
+        "| Unlisted specialized term | Context-dependent | Keep English when uncertain |\n\n"
+        "## Proper Nouns And Keep-English Items\n"
+        f"{title_item}"
+        f"- Document class(es): {class_list}\n"
+        f"- Packages detected: {package_list}\n"
+        f"- Environment names detected: {environment_list}\n"
+        "- Preserve model names, dataset names, software, people, institutions, "
+        "mathematical symbols, citation keys, labels, URLs, and code identifiers.\n"
+        "- Source files:\n"
+        f"{file_list}\n\n"
+        "## Style Rules\n"
+        "- Use concise, formal, natural Simplified Chinese suitable for an academic paper.\n"
+        "- Keep terminology consistent across chunks and follow the fixed translation "
+        "and keep-English sections below.\n"
+        "- Preserve mathematical notation and do not simplify, reinterpret, add, remove, "
+        "or reorder technical claims.\n"
+        "- Translate all visible English prose unless it is code, metadata, a proper noun, "
+        "or an item explicitly marked to remain in English.\n\n"
+        "## LaTeX Cautions\n"
+        + "\n".join(cautions)
+        + "\n"
+    )
+
+
+def _render_arxiv_metadata_sections(metadata: ArxivMetadata | None) -> str:
+    if metadata is None:
+        return ""
+
+    sections: list[str] = []
+    categories = _unique_preserving_order(
+        [
+            category
+            for category in [metadata.primary_category, *metadata.categories]
+            if category
+        ]
+    )
+    if categories:
+        field_lines = ["## Field And Subfield"]
+        if metadata.primary_category:
+            field_lines.append(
+                f"- arXiv primary category: `{metadata.primary_category}`"
+            )
+        field_lines.append(
+            "- arXiv categories: "
+            + ", ".join(f"`{category}`" for category in categories)
+        )
+        sections.append("\n".join(field_lines))
+
+    topic_lines: list[str] = []
+    if metadata.title:
+        topic_lines.append(
+            f"- Title: `{_escape_markdown_code(metadata.title)}`"
+        )
+    if metadata.abstract:
+        topic_lines.append(f"- Abstract: {metadata.abstract}")
+    if topic_lines:
+        sections.append("## Topic Context From arXiv\n" + "\n".join(topic_lines))
+
+    if not sections:
+        return ""
+    return "\n\n".join(sections) + "\n\n"
+
+
+def _extract_sections(
+    source_texts: dict[Path, str],
+) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    for text in source_texts.values():
+        for match in SECTION_COMMAND_RE.finditer(text):
+            brace_start = match.end() - 1
+            brace_end = _balanced_group_end(text, brace_start, "{", "}")
+            if brace_end is None:
+                continue
+            heading = re.sub(
+                r"\s+",
+                " ",
+                text[brace_start + 1 : brace_end - 1],
+            ).strip()
+            if heading:
+                sections.append((match.group("level"), heading))
+    return sections
+
+
+def _extract_first_braced_argument(
+    text: str,
+    pattern: re.Pattern[str],
+) -> str | None:
+    match = pattern.search(text)
+    if match is None:
+        return None
+    brace_start = match.end() - 1
+    brace_end = _balanced_group_end(text, brace_start, "{", "}")
+    if brace_end is None:
+        return None
+    return re.sub(r"\s+", " ", text[brace_start + 1 : brace_end - 1]).strip()
+
+
+def _collect_math_contexts(text: str) -> list[str]:
+    """Collect math spans using bounded scans instead of backtracking regexes."""
+
+    contexts: list[str] = []
+    position = 0
+    while position < len(text):
+        if text.startswith(r"\(", position):
+            end = text.find(r"\)", position + 2)
+            if end >= 0:
+                contexts.append(text[position : end + 2])
+                position = end + 2
+                continue
+        if text.startswith(r"\[", position):
+            end = text.find(r"\]", position + 2)
+            if end >= 0:
+                contexts.append(text[position : end + 2])
+                position = end + 2
+                continue
+        if text.startswith("$$", position) and not _is_escaped(text, position):
+            end = _find_unescaped_token(text, "$$", position + 2)
+            if end >= 0:
+                contexts.append(text[position : end + 2])
+                position = end + 2
+                continue
+        if (
+            text[position] == "$"
+            and not _is_escaped(text, position)
+            and not text.startswith("$$", position)
+        ):
+            end = _find_unescaped_single_dollar(text, position + 1)
+            if end >= 0:
+                contexts.append(text[position : end + 1])
+                position = end + 1
+                continue
+        position += 1
+
+    for match in MATH_ENVIRONMENT_BEGIN_RE.finditer(text):
+        name = match.group("name") + (match.group("star") or "")
+        closing = rf"\end{{{name}}}"
+        end = text.find(closing, match.end())
+        if end >= 0:
+            contexts.append(text[match.start() : end + len(closing)])
+    return contexts
+
+
+def _find_unescaped_token(text: str, token: str, start: int) -> int:
+    position = text.find(token, start)
+    while position >= 0:
+        if not _is_escaped(text, position):
+            return position
+        position = text.find(token, position + len(token))
+    return -1
+
+
+def _find_unescaped_single_dollar(text: str, start: int) -> int:
+    position = text.find("$", start)
+    while position >= 0:
+        if (
+            not _is_escaped(text, position)
+            and not text.startswith("$$", position)
+            and (position == 0 or text[position - 1] != "$")
+        ):
+            return position
+        position = text.find("$", position + 1)
+    return -1
+
+
+def _unique_sorted(values) -> list[str]:
+    return sorted(set(values), key=str.casefold)
+
+
+def _unique_preserving_order(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def _inline_code_list(values: list[str]) -> str:
+    return ", ".join(f"`{_escape_markdown_code(value)}`" for value in values)
 
 
 def collect_predefined_latex_commands(source_dir: Path) -> tuple[str, ...]:
@@ -79,7 +347,7 @@ def collect_predefined_latex_commands(source_dir: Path) -> tuple[str, ...]:
         for path in source_files
     }
     document_math_text = "\n".join(
-        "\n".join(MATH_CONTEXT_RE.findall(text))
+        "\n".join(_collect_math_contexts(text))
         for path, text in texts.items()
         if path.suffix.lower() in LATEX_DOCUMENT_SUFFIXES
     )

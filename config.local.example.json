@@ -1,9 +1,6 @@
-[
-  {
-    "deepseek_api_key": "sk-your-deepseek-api-key",
-    "deepseek_model": "deepseek-v4-pro",
-    "deepseek_guide_model": "deepseek-v4-flash",
-    "deepseek_appendix_model": "deepseek-v4-flash",
-    "deepseek_base_url": "https://api.deepseek.com/chat/completions"
-  }
-]
+{
+  "deepseek_api_key": "sk-your-deepseek-api-key",
+  "deepseek_model": "deepseek-v4-pro",
+  "deepseek_appendix_model": "deepseek-v4-flash",
+  "deepseek_base_url": "https://api.deepseek.com/chat/completions"
+}

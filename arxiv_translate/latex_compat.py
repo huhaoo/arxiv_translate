@@ -27,6 +27,42 @@ CJK_ENVIRONMENT_SHIM = (
 )
 DECLARE_UNICODE_CHARACTER_RE = re.compile(r"^\s*\\DeclareUnicodeCharacter\b")
 LATEX_COMPAT_SUFFIXES = {".tex", ".ltx", ".sty", ".cls"}
+STANDARD_ZERO_ARG_MACROS = {
+    "bfseries",
+    "centering",
+    "footnotesize",
+    "huge",
+    "Huge",
+    "itshape",
+    "large",
+    "Large",
+    "LARGE",
+    "mdseries",
+    "noindent",
+    "normalfont",
+    "normalsize",
+    "raggedleft",
+    "raggedright",
+    "rmfamily",
+    "scshape",
+    "scriptsize",
+    "sffamily",
+    "slshape",
+    "small",
+    "tiny",
+    "ttfamily",
+    "upshape",
+}
+COMMAND_DEFINITION_RE = re.compile(
+    r"\\(?:newcommand|renewcommand|providecommand|DeclareRobustCommand)"
+    r"\*?\s*"
+    r"(?:\{\s*\\(?P<braced>[A-Za-z@]+)\s*\}|\\(?P<bare>[A-Za-z@]+))"
+    r"\s*(?:\[\s*(?P<arity>\d+)\s*\])?"
+)
+DEF_DEFINITION_RE = re.compile(
+    r"\\(?:def|gdef|edef|xdef)\s*\\(?P<name>[A-Za-z@]+)"
+    r"(?P<parameters>[^{}\r\n]*)\{"
+)
 
 
 def ensure_chinese_latex_support(main_tex: Path) -> bool:
@@ -277,7 +313,8 @@ def protect_zero_arg_macros_before_nonascii(
 ) -> str:
     """Add an empty group after no-argument macros before CJK/non-ASCII text."""
 
-    names = set(macro_names or set())
+    names = set(STANDARD_ZERO_ARG_MACROS)
+    names.update(macro_names or set())
     names.update(_zero_arg_macro_names(text))
     if not names:
         return text
@@ -321,13 +358,19 @@ def prefer_fandol_ctex_for_xelatex(text: str) -> str:
 
 
 def _zero_arg_macro_names(text: str) -> set[str]:
-    names = set(re.findall(r"\\(?:newcommand|renewcommand)\{\\([A-Za-z]+)\}\{", text))
-    names.update(re.findall(r"\\def\\([A-Za-z]+)\{", text))
+    names: set[str] = set()
+    for match in COMMAND_DEFINITION_RE.finditer(text):
+        if match.group("arity") not in {None, "0"}:
+            continue
+        names.add(match.group("braced") or match.group("bare"))
+    for match in DEF_DEFINITION_RE.finditer(text):
+        if "#" not in match.group("parameters"):
+            names.add(match.group("name"))
     return names
 
 
 def _is_macro_definition_line(line: str) -> bool:
-    return bool(re.search(r"\\(?:newcommand|renewcommand)\{\\[A-Za-z]+\}|\\def\\[A-Za-z]+", line))
+    return bool(COMMAND_DEFINITION_RE.search(line) or DEF_DEFINITION_RE.search(line))
 
 
 def _missing_closing_braces(line: str) -> int:

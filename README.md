@@ -16,32 +16,22 @@
 - 一个兼容 DeepSeek 的 API key
 - 本地 TeX 发行版，用于编译；建议安装 `latexmk` 和 `xelatex`
 
-翻译器会使用 `config.local.json` 中配置的 OpenAI 兼容 chat completions 接口。该文件必须是一个 JSON 数组，并且每个对象都必须包含下方示例中的所有字段。
+翻译器会使用 `config.local.json` 中配置的单个 OpenAI 兼容 chat completions 接口。该文件必须是一个 JSON 对象，并包含下方示例中的所有字段。
 
 ## API key 配置
 
 将 `config.local.example.json` 复制为 `config.local.json`，然后把你的 API key 填进去：
 
 ```json
-[
-  {
-    "deepseek_api_key": "sk-your-deepseek-api-key",
-    "deepseek_model": "DeepSeek-V4-Pro",
-    "deepseek_guide_model": "DeepSeek-V4-Pro",
-    "deepseek_appendix_model": "DeepSeek-V4-Pro",
-    "deepseek_base_url": "https://llmapi.paratera.com/chat/completions"
-  },
-  {
-    "deepseek_api_key": "sk-your-backup-deepseek-api-key",
-    "deepseek_model": "deepseek-v4-pro",
-    "deepseek_guide_model": "deepseek-v4-flash",
-    "deepseek_appendix_model": "deepseek-v4-flash",
-    "deepseek_base_url": "https://api.deepseek.com/chat/completions"
-  }
-]
+{
+  "deepseek_api_key": "sk-your-deepseek-api-key",
+  "deepseek_model": "deepseek-v4-pro",
+  "deepseek_appendix_model": "deepseek-v4-flash",
+  "deepseek_base_url": "https://api.deepseek.com/chat/completions"
+}
 ```
 
-工具会按顺序尝试这些配置。如果某个配置在 DeepSeek 请求中失败，会自动切换到下一个配置。第一个示例使用并行科技的 OpenAI 兼容接口；第二个示例保留官方 DeepSeek 接口作为备用。
+两个模型字段共用同一个 API key 和接口地址，分别用于正文和附录翻译。请求失败时会按单个客户端的重试策略重试，不再切换到其他 API 配置。
 
 `config.local.json` 已被 git 忽略，因此 key 只会保存在你的本机。
 
@@ -95,7 +85,7 @@ python -m arxiv_translate https://arxiv.org/html/2401.00001 --keep-source-archiv
 
 分块只会在段落边界切分。如果单个段落长度超过分块大小，会保持该段落完整，不会在段落中间切开。
 
-在分块翻译之前，工具会先把完整 TeX 源码发送给 `deepseek_guide_model`，并缓存一份简洁的 `paper-guide.md`，其中包含论文所属领域、论文结构、术语表、风格规则、LaTeX 注意事项，以及从源码确定性提取的预定义命令。后续翻译请求会在动态上下文前附加这份固定指南，以提高术语一致性和缓存命中率。
+在分块翻译之前，工具会结合 arXiv 元数据和本地 TeX 源码生成 `paper-guide.md`，不会为 guide 发起额外 API 请求。模板在元数据存在时收录 arXiv 标题、摘要、主分类和全部分类；缺失的元数据栏目会直接省略。它还包含章节结构、源码文件、文档类、宏包、环境、风格规则、LaTeX 注意事项、固定译法、保留英文词，以及从源码确定性提取的预定义命令。后续翻译请求会在动态上下文前附加这份固定指南，以提高术语一致性和缓存命中率。
 默认保留英文的术语维护在 `arxiv_translate/terminology/preserved_terms.md`，例如 `token`、`scaling law`。如果你希望某些术语始终不要翻译，直接把它们按同样格式追加到这个文件里即可。
 默认优先采用的中文术语维护在 `arxiv_translate/terminology/preferred_translations.md`。如果你希望某些术语始终翻译成固定中文，例如把 `mechanistic interpretability` 统一翻成“机制可解释性”，直接把它们追加到这个表里即可。
 

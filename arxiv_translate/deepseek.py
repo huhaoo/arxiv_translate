@@ -33,19 +33,6 @@ SKIP_UNTRANSLATED_CHECK_ENVIRONMENTS = {
 }
 
 
-GUIDE_SYSTEM_PROMPT = """You are a senior academic translator preparing a translation guide for a LaTeX research paper.
-Analyze the complete paper source and produce a concise guide that will be prepended to later chunk-by-chunk translation prompts.
-
-Follow these rules:
-- Do not translate the paper.
-- Do not include long quotations from the paper.
-- First identify the paper's primary field and likely subfield, then use that judgment to choose terminology, tone, and translation conventions.
-- Prefer stable, reusable guidance over paragraph-specific commentary.
-- If uncertain about a term, mark it as "keep English" or "needs context" instead of guessing.
-- Preserve all mathematical symbols, labels, citations, theorem names, author names, arXiv IDs, DOIs, package names, file names, and code identifiers.
-- Output Markdown only, with the exact section headings requested."""
-
-
 SYSTEM_PROMPT = """You are a strict LaTeX-to-Chinese translation engine.
 Your task is to translate only human-readable English prose into Simplified Chinese while preserving a compilable LaTeX fragment.
 
@@ -102,27 +89,7 @@ class DeepSeekClient:
     temperature: float = 0.2
     retries: int = 3
     untranslated_retries: int = 5
-
-    def generate_paper_guide(self, latex_document: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": GUIDE_SYSTEM_PROMPT},
-                {"role": "user", "content": _guide_request(latex_document)},
-            ],
-            "temperature": 0.1,
-        }
-
-        for attempt in range(1, self.retries + 1):
-            try:
-                return self._post(payload).strip()
-            except DeepSeekError as exc:
-                if attempt == self.retries:
-                    raise
-                if exc.retryable:
-                    time.sleep(_retry_delay(exc, attempt))
-
-        raise DeepSeekError("paper guide generation failed after retries")
+    warning_logger: Callable[[str], None] | None = None
 
     def translate_latex(
         self,
@@ -132,6 +99,7 @@ class DeepSeekClient:
         paper_guide: str = "",
         warning_logger: Callable[[str], None] | None = None,
     ) -> str:
+        warning_logger = warning_logger or self.warning_logger
         retry_warning = ""
         request_errors = 0
         untranslated_warnings = 0
@@ -229,72 +197,6 @@ class DeepSeekClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise DeepSeekError(f"DeepSeek API response has no message: {data}") from exc
         return content
-
-
-@dataclass
-class DeepSeekFailoverClient:
-    clients: list[DeepSeekClient]
-    label: str = "DeepSeek"
-    switch_logger: Callable[[str], None] | None = None
-    warning_logger: Callable[[str], None] | None = None
-
-    @property
-    def model(self) -> str:
-        return "failover:" + ",".join(client.model for client in self.clients)
-
-    def generate_paper_guide(self, latex_document: str) -> str:
-        return self._call(
-            "paper guide generation",
-            lambda client: client.generate_paper_guide(latex_document),
-        )
-
-    def translate_latex(
-        self,
-        fragment: str,
-        context_before: str = "",
-        context_after: str = "",
-        paper_guide: str = "",
-    ) -> str:
-        return self._call(
-            "translation",
-            lambda client: client.translate_latex(
-                fragment,
-                context_before=context_before,
-                context_after=context_after,
-                paper_guide=paper_guide,
-                warning_logger=self.warning_logger,
-            ),
-        )
-
-    def _call(self, operation_name: str, operation):
-        if not self.clients:
-            raise DeepSeekError(f"{self.label} has no configured clients")
-
-        errors: list[str] = []
-        for index, client in enumerate(self.clients):
-            try:
-                result = operation(client)
-            except DeepSeekError as exc:
-                errors.append(f"#{index + 1} model={client.model}: {exc}")
-                if index + 1 < len(self.clients):
-                    self._log_switch(index, client, exc)
-                continue
-            return result
-
-        raise DeepSeekError(
-            f"{self.label} {operation_name} failed for all configs: "
-            + " | ".join(errors)
-        )
-
-    def _log_switch(self, index: int, client: DeepSeekClient, exc: DeepSeekError) -> None:
-        if self.switch_logger is None:
-            return
-        self.switch_logger(
-            f"{self.label}: config #{index + 1} "
-            f"{_base_url_host(client.base_url)} model={client.model} failed; "
-            f"trying config #{index + 2}. reason: {_short_error(exc)}"
-        )
-
 
 def validate_translation_response(
     content: str,
@@ -414,13 +316,6 @@ def _base_url_host(base_url: str) -> str:
     return rest.split("/", 1)[0]
 
 
-def _short_error(exc: DeepSeekError) -> str:
-    message = " ".join(str(exc).split())
-    if len(message) > 180:
-        return message[:177] + "..."
-    return message
-
-
 def _warn_untranslated_accepted(
     warning_logger: Callable[[str], None] | None,
     model: str,
@@ -434,7 +329,6 @@ def _warn_untranslated_accepted(
         f"warnings on {_base_url_host(base_url)} model={model}. "
         f"span: {untranslated[:160]}"
     )
-
 
 def _retry_delay(exc: DeepSeekError, attempt: int) -> int:
     if exc.status_code == 429:
@@ -495,40 +389,4 @@ def _translation_request(
         "Return only the raw LaTeX translation of <CURRENT_FRAGMENT> above. "
         "Do not output, translate, summarize, or repeat any content from "
         "<PAPER_TRANSLATION_GUIDE>, <PREVIOUS_CONTEXT>, or <NEXT_CONTEXT>."
-    )
-
-
-def _guide_request(latex_document: str) -> str:
-    preferred_translations = format_preferred_translations_for_prompt()
-    preserved_terms = format_preserved_terms_for_prompt()
-    return (
-        "Create a concise translation guide for this complete LaTeX paper.\n"
-        "Use the following exact Markdown headings and keep the guide practical for later chunk translation.\n"
-        "First identify the paper's primary field and likely subfield, then use that domain judgment to improve terminology choices, tone, and what should remain in English.\n"
-        "Do not translate the paper itself.\n\n"
-        f"Use these preferred Chinese translations when the English term appears as a technical term: {preferred_translations}.\n"
-        f"The following technical terms must remain in English when they appear as terms: {preserved_terms}.\n\n"
-        "Required output format:\n"
-        "# Paper Translation Guide\n"
-        "## Field And Subfield\n"
-        "- Primary field.\n"
-        "- Likely subfield or research area.\n"
-        "- Short note on how this affects translation terminology and style.\n"
-        "## One-Sentence Topic\n"
-        "A single sentence in Simplified Chinese describing the paper.\n"
-        "## Structure\n"
-        "- Bullet list of major sections or logical parts.\n"
-        "## Glossary\n"
-        "| English term | Chinese translation | Notes |\n"
-        "| --- | --- | --- |\n"
-        "Include core technical terms, theorem/result names, graph/math/statistical terms, and recurring phrases. Reuse the preferred Chinese translations above whenever they apply.\n"
-        "## Proper Nouns And Keep-English Items\n"
-        "- Names, software/packages, datasets, commands, labels, symbols, and terms that should remain in English or LaTeX.\n"
-        "## Style Rules\n"
-        "- Rules for tone, mathematical style, terminology consistency, domain-specific wording, and what not to translate.\n"
-        "## LaTeX Cautions\n"
-        "- Specific macros, environments, code blocks, tables, figures, captions, or bibliography areas that require extra care.\n\n"
-        "<COMPLETE_LATEX_SOURCE>\n"
-        f"{latex_document}\n"
-        "</COMPLETE_LATEX_SOURCE>"
     )

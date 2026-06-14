@@ -10,11 +10,11 @@ from pathlib import Path
 from .arxiv import download_pdf, download_source, parse_arxiv_id
 from .compiler import compile_latex
 from .config import DEFAULT_CONFIG_PATH, config_string, load_config
-from .deepseek import DeepSeekClient, DeepSeekFailoverClient
+from .deepseek import DeepSeekClient
 from .endnote import write_endnote_import
 from .errors import ArxivTranslateError, SourceUnavailableError
 from .extract import extract_source
-from .guide import load_or_generate_paper_guide
+from .guide import generate_template_paper_guide
 from .latex_compat import ensure_chinese_latex_support, ensure_latex_compatibility
 from .links import path_uri
 from .metadata import fetch_arxiv_metadata
@@ -219,7 +219,7 @@ def run(args: argparse.Namespace) -> int:
         (job_dir / "translation-cache.json").unlink(missing_ok=True)
         guide_path.unlink(missing_ok=True)
 
-    configs = load_config(args.config)
+    config = load_config(args.config)
 
     cache = TranslationCache(job_dir / "translation-cache.json")
 
@@ -259,28 +259,25 @@ def run(args: argparse.Namespace) -> int:
         print(f"      found {len(tex_files)} TeX file(s)")
         original_main_tex = discover_main_tex(source_dir, args.main)
 
-        print("[4/6] generating guide and translating TeX files with DeepSeek")
+        print("[4/6] generating local guide and translating TeX files with DeepSeek")
         prepare_translated_tree(source_dir, translated_dir)
-        guide_client = _build_deepseek_failover_client(
-            configs,
-            model_key="deepseek_guide_model",
-            timeout=args.timeout,
-            label="DeepSeek guide",
+        print("      guide: generating from the local template")
+        paper_guide = generate_template_paper_guide(
+            source_dir,
+            guide_path,
+            metadata,
         )
-        paper_guide = load_or_generate_paper_guide(source_dir, guide_path, guide_client)
         _print_file_output("paper guide", guide_path, job_dir)
-        client = _build_deepseek_failover_client(
-            configs,
+        client = _build_deepseek_client(
+            config,
             model_key="deepseek_model",
             timeout=args.timeout,
-            label="DeepSeek main",
             warning_logger=warning_collector.add,
         )
-        appendix_client = _build_deepseek_failover_client(
-            configs,
+        appendix_client = _build_deepseek_client(
+            config,
             model_key="deepseek_appendix_model",
             timeout=args.timeout,
-            label="DeepSeek appendix",
             warning_logger=warning_collector.add,
         )
         translated_files = translate_tex_tree(
@@ -363,32 +360,22 @@ def _print_translation_progress(done: int, total: int, label: str) -> None:
             _PROGRESS_LINE_LENGTH = 0
 
 
-def _build_deepseek_failover_client(
-    configs: list[dict],
+def _build_deepseek_client(
+    config: dict,
     *,
     model_key: str,
     timeout: int,
-    label: str,
     warning_logger=None,
-) -> DeepSeekFailoverClient:
-    clients = [
-        DeepSeekClient(
-            api_key=config_string(
-                config,
-                "deepseek_api_key",
-                index,
-                allow_empty=True,
-            ),
-            model=config_string(config, model_key, index),
-            base_url=config_string(config, "deepseek_base_url", index),
-            timeout=timeout,
-        )
-        for index, config in enumerate(configs, start=1)
-    ]
-    return DeepSeekFailoverClient(
-        clients,
-        label=label,
-        switch_logger=lambda message: print(f"      {message}"),
+) -> DeepSeekClient:
+    return DeepSeekClient(
+        api_key=config_string(
+            config,
+            "deepseek_api_key",
+            allow_empty=True,
+        ),
+        model=config_string(config, model_key),
+        base_url=config_string(config, "deepseek_base_url"),
+        timeout=timeout,
         warning_logger=warning_logger,
     )
 
