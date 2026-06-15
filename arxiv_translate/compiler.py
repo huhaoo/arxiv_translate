@@ -27,8 +27,8 @@ def compile_latex(root: Path, main_tex: Path) -> Path:
             "-file-line-error",
             str(relative_main),
         ]
-        _run(cmd, root, log_path)
-        if output_pdf.exists():
+        latexmk_returncode = _run(cmd, root, log_path)
+        if latexmk_returncode == 0 and output_pdf.exists():
             return output_pdf
 
     xelatex = shutil.which("xelatex")
@@ -40,8 +40,15 @@ def compile_latex(root: Path, main_tex: Path) -> Path:
             "-file-line-error",
             str(relative_main),
         ]
-        _run(cmd, root, log_path)
-        _run(cmd, root, log_path)
+        # A source bundle may include a usable .bbl but omit its .bib files.
+        # In that case latexmk refuses BibTeX and exits nonzero even though
+        # repeated XeLaTeX passes can resolve all citations and references.
+        for _ in range(3):
+            if _run(cmd, root, log_path) != 0:
+                raise CompilationError(
+                    "LaTeX compilation failed; see log file:\n"
+                    f"{format_path_link(log_path)}"
+                )
         if output_pdf.exists():
             return output_pdf
 
@@ -55,7 +62,7 @@ def compile_latex(root: Path, main_tex: Path) -> Path:
     )
 
 
-def _run(cmd: list[str], cwd: Path, log_path: Path) -> None:
+def _run(cmd: list[str], cwd: Path, log_path: Path) -> int:
     with log_path.open("a", encoding="utf-8", errors="replace") as log_file:
         log_file.write(f"$ {' '.join(cmd)}\n")
         log_file.flush()
@@ -70,7 +77,4 @@ def _run(cmd: list[str], cwd: Path, log_path: Path) -> None:
             check=False,
         )
         log_file.write(f"\n[exit code {proc.returncode}]\n\n")
-    if proc.returncode != 0:
-        raise CompilationError(
-            f"LaTeX compilation failed; see log file:\n{format_path_link(log_path)}"
-        )
+    return proc.returncode

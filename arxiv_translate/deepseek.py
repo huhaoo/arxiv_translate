@@ -21,7 +21,6 @@ UNTRANSLATED_ENGLISH_RE = re.compile(
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
 )
 ENGLISH_WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z'-]{2,}\b")
-DISPLAY_MATH_ENVIRONMENTS = "align\\*?|equation\\*?|gather\\*?|multline\\*?|split"
 SKIP_UNTRANSLATED_CHECK_ENVIRONMENTS = {
     "alltt",
     "filecontents",
@@ -49,6 +48,8 @@ Output rules:
 - Output exactly one translation of the current fragment; do not duplicate any sentence or paragraph.
 - Do not leave ordinary English prose untranslated. If a sentence is visible article prose, translate it to Simplified Chinese.
 - Keep paragraph boundaries, line breaks, indentation, and ordering as close to the input as possible.
+- The current fragment is an arbitrary block from a larger LaTeX document. Its \\begin{...} and \\end{...} commands may intentionally be unpaired.
+- Never add, remove, rename, move, or complete any \\begin{...} or \\end{...} command. Preserve every environment boundary exactly as it appears.
 - If a fragment is mostly LaTeX structure, math, code, bibliography data, or generated auxiliary content, return it unchanged except for clear prose.
 
 Translate:
@@ -58,8 +59,10 @@ Translate:
 Preserve exactly:
 - All LaTeX commands and environment names, including backslashes, braces, optional arguments, and command order.
 - Labels, refs, citations, bibliography keys, anchors, counters, and cross-reference identifiers.
-- Math expressions and math environments: $...$, $$...$$, \\(...\\), \\[...\\], equation, align, gather, multline, cases, array, matrix, theorem-like math displays, and all math symbols.
-- Never insert $...$ delimiters inside an existing display math environment such as equation, align, gather, multline, split, or cases. Keep symbols like i \\in x_t directly in that math environment.
+- Math expressions and math environments: $...$, $$...$$, \\(...\\), \\[...\\], equation, align, gather, multline, cases, cases*, array, matrix, theorem-like math displays, and all math symbols.
+- In math-mode portions of display environments such as equation, align, gather, multline, split, and cases, do not wrap symbols in additional $...$ delimiters. For example, keep i \\in x_t directly in math mode.
+- Do not assume every nested cell or argument inside a display environment is in math mode. Preserve text-mode islands such as \\text{...} and \\mbox{...}. In mathtools cases*, the second column is text mode; when translated prose in that column contains math, retain or add inline math delimiters required for valid LaTeX, for example: & 如果 $r \\neq r'$ \\\\.
+- Distinguish cases from cases*: ordinary cases columns are math mode, while the condition column of cases* is text mode.
 - Graphics, file paths, URLs, package names, class names, option names, and input/include targets.
 - Table structure: &, \\\\, \\hline, \\cline, \\multicolumn, \\multirow, column specs, alignment markers, and row/column counts.
 - Code and verbatim-like content: verbatim, lstlisting, minted, alltt, algorithmic code lines, shell commands, programming identifiers, and code comments inside code blocks.
@@ -207,15 +210,8 @@ def validate_translation_response(
     """Reject wrapper text that would make translation output unsafe."""
 
     validate_translation_protocol(content)
-    fixed, count = repair_nested_dollars_in_display_math(content)
-    validate_latex_braces_balanced(fixed)
-    if count and warning_logger is not None:
-        suffix = f" on {warning_context}" if warning_context else ""
-        warning_logger(
-            "warning: repaired nested dollar delimiters inside display math "
-            f"environments{suffix}. count: {count}"
-        )
-    return fixed
+    validate_latex_braces_balanced(content)
+    return content
 
 
 def validate_latex_braces_balanced(content: str) -> None:
@@ -264,27 +260,6 @@ def validate_translation_protocol(content: str) -> None:
             retryable=True,
             protocol_violation=True,
         )
-
-
-def repair_nested_dollars_in_display_math(content: str) -> tuple[str, int]:
-    """Remove accidental $ delimiters inserted inside existing display math."""
-
-    count = 0
-
-    def replace(match: re.Match[str]) -> str:
-        nonlocal count
-        environment = match.group(1)
-        body, fixes = re.subn(r"(?<!\\)\$", "", match.group(2))
-        count += fixes
-        return f"\\begin{{{environment}}}{body}\\end{{{environment}}}"
-
-    fixed = re.sub(
-        rf"\\begin\{{({DISPLAY_MATH_ENVIRONMENTS})\}}(.*?)\\end\{{\1\}}",
-        replace,
-        content,
-        flags=re.DOTALL,
-    )
-    return fixed, count
 
 
 def find_untranslated_english_warning(content: str, source_fragment: str) -> str:
