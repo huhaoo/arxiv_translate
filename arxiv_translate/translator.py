@@ -222,7 +222,7 @@ def _cache_key(
             "model": model,
             "preferred_translations": load_preferred_translations(),
             "preserved_terms": load_preserved_terms(),
-            "prompt": "latex-guide-context-v6",
+            "prompt": "latex-guide-context-v7",
         },
         ensure_ascii=False,
         sort_keys=True,

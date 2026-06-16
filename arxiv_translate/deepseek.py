@@ -14,7 +14,10 @@ from .preferred_translations import format_preferred_translations_for_prompt
 from .preserved_terms import format_preserved_terms_for_prompt, strip_preserved_terms
 
 INTERNAL_PROMPT_TAG_RE = re.compile(
+    r"(?:"
     r"</?(?:CURRENT_FRAGMENT|PREVIOUS_CONTEXT|NEXT_CONTEXT|PAPER_TRANSLATION_GUIDE)\s*>"
+    r"|\\(?:begin|end)\{(?:CURRENT_FRAGMENT|PREVIOUS_CONTEXT|NEXT_CONTEXT|PAPER_TRANSLATION_GUIDE)\}"
+    r")"
 )
 UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
@@ -42,6 +45,8 @@ Output rules:
   <CURRENT_FRAGMENT>, </CURRENT_FRAGMENT>, <PREVIOUS_CONTEXT>,
   </PREVIOUS_CONTEXT>, <NEXT_CONTEXT>, </NEXT_CONTEXT>,
   <PAPER_TRANSLATION_GUIDE>, or </PAPER_TRANSLATION_GUIDE>.
+- Never convert prompt boundary markers into LaTeX environments such as
+  \\begin{CURRENT_FRAGMENT} or \\end{CURRENT_FRAGMENT}.
 - Follow the paper translation guide when it is provided.
 - When previous/next context is provided, use it only for terminology and coherence.
 - Never translate, paraphrase, copy, repeat, or output the previous/next context.
