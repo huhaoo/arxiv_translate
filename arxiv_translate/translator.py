@@ -15,6 +15,7 @@ from .preferred_translations import load_preferred_translations
 from .preserved_terms import load_preserved_terms
 from .tex import (
     protect_latex_text_boxes,
+    normalize_latex_text_accents,
     restore_latex_text_boxes,
     should_translate_tex,
     split_latex_for_translation,
@@ -76,7 +77,7 @@ def translate_tex_tree(
     jobs: list[tuple[Path, str, list[str], list[str]]] = []
     for path in tex_files:
         raw = path.read_text(encoding="utf-8", errors="ignore")
-        original = strip_latex_comments(raw)
+        original = normalize_latex_text_accents(strip_latex_comments(raw))
         if original != raw:
             path.write_text(original, encoding="utf-8", newline="")
         protected_original, protected_text_boxes = protect_latex_text_boxes(original)
@@ -222,7 +223,7 @@ def _cache_key(
             "model": model,
             "preferred_translations": load_preferred_translations(),
             "preserved_terms": load_preserved_terms(),
-            "prompt": "latex-guide-context-v7",
+            "prompt": "latex-guide-context-v11",
         },
         ensure_ascii=False,
         sort_keys=True,

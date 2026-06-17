@@ -65,6 +65,30 @@ GLOSSARY_KEY_COMMANDS = {
     "Acrshortpl": 1,
 }
 PROTECTED_TEXT_BOX_RE = re.compile(r"\\AXTProtectedTextBox\s*\{\s*(\d+)\s*\}")
+LATEX_ACCENT_COMMANDS = {
+    '"',
+    "'",
+    "`",
+    "^",
+    "~",
+    "=",
+    ".",
+    "b",
+    "c",
+    "d",
+    "H",
+    "k",
+    "r",
+    "t",
+    "u",
+    "v",
+}
+LATEX_ACCENT_RE = re.compile(
+    r"\\(?:(?P<symbol>[\"'`\^~=\.])\s*"
+    r"(?:\{(?P<braced_symbol>[A-Za-z])\}|(?P<char_symbol>[A-Za-z]))"
+    r"|(?P<word>b|c|d|H|k|r|t|u|v)"
+    r"(?:\s*\{(?P<braced_word>[A-Za-z])\}|\s+(?P<char_word>[A-Za-z])))"
+)
 
 
 def discover_main_tex(root: Path, explicit: str | None = None) -> Path:
@@ -141,6 +165,28 @@ def strip_latex_comments(text: str) -> str:
     return "".join(output)
 
 
+def normalize_latex_text_accents(text: str) -> str:
+    """Remove fragile LaTeX text accents before prose translation.
+
+    This keeps commands like ``na\"ively`` from being split into invalid
+    control sequences during translation. Verbatim-like environments are left
+    untouched.
+    """
+
+    output: list[str] = []
+    verbatim_stack: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if verbatim_stack:
+            output.append(line)
+            _update_verbatim_stack(line, verbatim_stack)
+            continue
+
+        normalized = LATEX_ACCENT_RE.sub(_replace_latex_text_accent, line)
+        output.append(normalized)
+        _update_verbatim_stack(normalized, verbatim_stack)
+    return "".join(output)
+
+
 def protect_latex_text_boxes(text: str) -> tuple[str, list[str]]:
     """Replace fragile LaTeX regions with placeholders before translation."""
 
@@ -173,6 +219,19 @@ def restore_latex_text_boxes(text: str, blocks: list[str]) -> str:
         return match.group(0)
 
     return PROTECTED_TEXT_BOX_RE.sub(replace, text)
+
+
+def _replace_latex_text_accent(match: re.Match[str]) -> str:
+    accent = match.group("symbol") or match.group("word")
+    if accent not in LATEX_ACCENT_COMMANDS:
+        return match.group(0)
+    return (
+        match.group("braced_symbol")
+        or match.group("char_symbol")
+        or match.group("braced_word")
+        or match.group("char_word")
+        or match.group(0)
+    )
 
 
 def _find_text_box_spans(text: str) -> list[tuple[int, int]]:

@@ -19,6 +19,7 @@ INTERNAL_PROMPT_TAG_RE = re.compile(
     r"|\\(?:begin|end)\{(?:CURRENT_FRAGMENT|PREVIOUS_CONTEXT|NEXT_CONTEXT|PAPER_TRANSLATION_GUIDE)\}"
     r")"
 )
+LATEX_BACKTICK_QUOTE_RE = re.compile(r"`|\\`|\\'")
 UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
@@ -64,6 +65,10 @@ Translate:
 Preserve exactly:
 - All LaTeX commands and environment names, including backslashes, braces, optional arguments, and command order.
 - Labels, refs, citations, bibliography keys, anchors, counters, and cross-reference identifiers.
+- Do not use LaTeX backtick quotes in translated prose. Convert quoted visible
+  prose to ordinary text quotes: use ASCII double quotes (") for double quotes
+  and right single quote (’) for single quotes. Never output any backtick
+  character, doubled backticks, or backslash-prefixed quote punctuation.
 - Math expressions and math environments: $...$, $$...$$, \\(...\\), \\[...\\], equation, align, gather, multline, cases, cases*, array, matrix, theorem-like math displays, and all math symbols.
 - In math-mode portions of display environments such as equation, align, gather, multline, split, and cases, do not wrap symbols in additional $...$ delimiters. For example, keep i \\in x_t directly in math mode.
 - Do not assume every nested cell or argument inside a display environment is in math mode. Preserve text-mode islands such as \\text{...} and \\mbox{...}. In mathtools cases*, the second column is text mode; when translated prose in that column contains math, retain or add inline math delimiters required for valid LaTeX, for example: & 如果 $r \\neq r'$ \\\\.
@@ -214,9 +219,24 @@ def validate_translation_response(
 ) -> str:
     """Reject wrapper text that would make translation output unsafe."""
 
+    content = normalize_latex_quote_punctuation(content)
     validate_translation_protocol(content)
     validate_latex_braces_balanced(content)
     return content
+
+
+def normalize_latex_quote_punctuation(content: str) -> str:
+    """Convert LaTeX English quote punctuation to plain text quotes."""
+
+    return (
+        content.replace(r"\`\`", '"')
+        .replace(r"\`", "’")
+        .replace(r"\'\'", '"')
+        .replace(r"\'", "’")
+        .replace("``", '"')
+        .replace("''", '"')
+        .replace("`", "’")
+    )
 
 
 def validate_latex_braces_balanced(content: str) -> None:
@@ -262,6 +282,14 @@ def validate_translation_protocol(content: str) -> None:
     if match:
         raise DeepSeekError(
             f"DeepSeek translation echoed internal prompt tag: {match.group(0)}",
+            retryable=True,
+            protocol_violation=True,
+        )
+    match = LATEX_BACKTICK_QUOTE_RE.search(content)
+    if match:
+        raise DeepSeekError(
+            "DeepSeek translation used LaTeX backtick/accent quote punctuation: "
+            f"{match.group(0)}",
             retryable=True,
             protocol_violation=True,
         )
@@ -386,7 +414,7 @@ def _translation_request(
         "Before finalizing, verify that your answer contains none of these strings: "
         "<CURRENT_FRAGMENT>, </CURRENT_FRAGMENT>, <PREVIOUS_CONTEXT>, "
         "</PREVIOUS_CONTEXT>, <NEXT_CONTEXT>, </NEXT_CONTEXT>, "
-        "<PAPER_TRANSLATION_GUIDE>, </PAPER_TRANSLATION_GUIDE>, ```.\n\n"
+        "<PAPER_TRANSLATION_GUIDE>, </PAPER_TRANSLATION_GUIDE>, ```, `, \\`, \\''.\n\n"
         "<PAPER_TRANSLATION_GUIDE>\n"
         f"{paper_guide}\n"
         "</PAPER_TRANSLATION_GUIDE>\n\n"
