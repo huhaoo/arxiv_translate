@@ -190,7 +190,11 @@ def normalize_latex_text_accents(text: str) -> str:
 def protect_latex_text_boxes(text: str) -> tuple[str, list[str]]:
     """Replace fragile LaTeX regions with placeholders before translation."""
 
-    spans = _merge_spans(_find_text_box_spans(text) + _find_glossary_key_spans(text))
+    spans = _merge_spans(
+        _find_verbatim_environment_spans(text)
+        + _find_text_box_spans(text)
+        + _find_glossary_key_spans(text)
+    )
     if not spans:
         return text, []
 
@@ -232,6 +236,31 @@ def _replace_latex_text_accent(match: re.Match[str]) -> str:
         or match.group("char_word")
         or match.group(0)
     )
+
+
+def _find_verbatim_environment_spans(text: str) -> list[tuple[int, int]]:
+    """Find code/verbatim environments that must bypass translation entirely."""
+
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        match = BEGIN_ENV_RE.search(text, index)
+        if match is None:
+            break
+        env_name = match.group(1)
+        if env_name not in VERBATIM_ENVIRONMENTS:
+            index = match.end()
+            continue
+
+        end_marker = rf"\end{{{env_name}}}"
+        end_start = text.find(end_marker, match.end())
+        if end_start == -1:
+            index = match.end()
+            continue
+        end = end_start + len(end_marker)
+        spans.append((match.start(), end))
+        index = end
+    return spans
 
 
 def _find_text_box_spans(text: str) -> list[tuple[int, int]]:
