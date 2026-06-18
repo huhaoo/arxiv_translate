@@ -20,6 +20,13 @@ INTERNAL_PROMPT_TAG_RE = re.compile(
     r")"
 )
 LATEX_BACKTICK_QUOTE_RE = re.compile(r"`|\\`|\\'")
+STRUCTURAL_IDENTIFIER_ARG_RE = re.compile(
+    r"\\(?P<command>"
+    r"(?:label|ref|eqref|cref|Cref|autoref|cite|citep|citet|citealp|citealt|"
+    r"citeauthor|citeyear|citeyearpar)"
+    r"\*?(?:\[[^\[\]{}]*\])*"
+    r")\{(?P<arg>[^{}]*)\}"
+)
 UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
@@ -65,6 +72,7 @@ Translate:
 Preserve exactly:
 - All LaTeX commands and environment names, including backslashes, braces, optional arguments, and command order.
 - Labels, refs, citations, bibliography keys, anchors, counters, and cross-reference identifiers.
+- Never escape underscores in labels, refs, citations, or bibliography keys. Keep identifiers like section:sparse_autoencoder, not section:sparse\\_autoencoder.
 - Do not use LaTeX backtick quotes in translated prose. Convert quoted visible
   prose to ordinary text quotes: use ASCII double quotes (") for double quotes
   and right single quote (’) for single quotes. Never output any backtick
@@ -220,6 +228,7 @@ def validate_translation_response(
     """Reject wrapper text that would make translation output unsafe."""
 
     content = normalize_latex_quote_punctuation(content)
+    content = normalize_structural_identifier_escapes(content)
     validate_translation_protocol(content)
     validate_latex_braces_balanced(content)
     return content
@@ -237,6 +246,18 @@ def normalize_latex_quote_punctuation(content: str) -> str:
         .replace("''", '"')
         .replace("`", "’")
     )
+
+
+def normalize_structural_identifier_escapes(content: str) -> str:
+    """Restore escaped underscores in LaTeX cross-reference identifiers."""
+
+    def replace(match: re.Match[str]) -> str:
+        arg = match.group("arg")
+        if r"\_" not in arg:
+            return match.group(0)
+        return "\\" + match.group("command") + "{" + arg.replace(r"\_", "_") + "}"
+
+    return STRUCTURAL_IDENTIFIER_ARG_RE.sub(replace, content)
 
 
 def validate_latex_braces_balanced(content: str) -> None:
