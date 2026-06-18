@@ -28,6 +28,7 @@ STRUCTURAL_IDENTIFIER_ARG_RE = re.compile(
     r"\*?(?:\[[^\[\]{}]*\])*"
     r")\{(?P<arg>[^{}]*)\}"
 )
+ENVIRONMENT_BOUNDARY_RE = re.compile(r"\\(?P<command>begin|end)\{(?P<name>[^{}]+)\}")
 UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
@@ -237,6 +238,7 @@ def validate_translation_response(
     content = normalize_structural_identifier_escapes(content)
     validate_translation_protocol(content)
     validate_latex_braces_balanced(content)
+    validate_environment_boundaries_preserved(content, source_fragment)
     return content
 
 
@@ -296,6 +298,49 @@ def validate_latex_braces_balanced(content: str) -> None:
             retryable=True,
             protocol_violation=True,
         )
+
+
+def validate_environment_boundaries_preserved(
+    content: str,
+    source_fragment: str,
+) -> None:
+    """Reject translations that add, remove, rename, or reorder environments."""
+
+    if not source_fragment:
+        return
+    source_boundaries = _environment_boundaries(source_fragment)
+    translated_boundaries = _environment_boundaries(content)
+    if translated_boundaries == source_boundaries:
+        return
+    raise DeepSeekError(
+        "DeepSeek translation changed LaTeX environment boundaries",
+        retryable=True,
+        protocol_violation=True,
+    )
+
+
+def _environment_boundaries(content: str) -> list[tuple[str, str]]:
+    boundaries: list[tuple[str, str]] = []
+    for line in content.splitlines():
+        visible = line
+        for index, char in enumerate(line):
+            if char == "%" and not _is_escaped_character(line, index):
+                visible = line[:index]
+                break
+        boundaries.extend(
+            (match.group("command"), match.group("name"))
+            for match in ENVIRONMENT_BOUNDARY_RE.finditer(visible)
+        )
+    return boundaries
+
+
+def _is_escaped_character(text: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
 
 
 def validate_translation_protocol(content: str) -> None:
