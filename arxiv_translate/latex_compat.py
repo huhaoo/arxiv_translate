@@ -19,6 +19,13 @@ MICROTYPE_PACKAGE_RE = re.compile(
 CJKUTF8_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?P<options>\[[^\]]*\])?\{CJKutf8\}(?P<tail>\s*(?:%.*)?)$"
 )
+MINTED_PACKAGE_RE = re.compile(
+    r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{minted\}"
+    r"(?P<tail>\s*(?:%.*)?)$"
+)
+MINTED_COMMAND_RE = re.compile(
+    r"\\(?:inputminted|mintinline|newminted|newmintinline|newmintedfile)\b"
+)
 PACKAGE_LOAD_RE = re.compile(
     r"(?m)^(?P<indent>[ \t]*)\\(?P<command>usepackage|RequirePackage)"
     r"[ \t]*(?:\[(?P<options>[^\]]*)\])?[ \t]*"
@@ -41,6 +48,15 @@ CJK_ENVIRONMENT_SHIM = (
     "\\else\n"
     "\\newenvironment{CJK}[3]{}{}\n"
     "\\fi"
+)
+MINTED_ENVIRONMENT_FALLBACK = (
+    "\\usepackage{fvextra}\n"
+    "\\newenvironment{minted}[2][]{%\n"
+    "  \\VerbatimEnvironment\n"
+    "  \\begin{Verbatim}[breaklines=true,breakanywhere=true]%\n"
+    "}{%\n"
+    "  \\end{Verbatim}%\n"
+    "}"
 )
 DECLARE_UNICODE_CHARACTER_RE = re.compile(r"^\s*\\DeclareUnicodeCharacter\b")
 LATEX_COMPAT_SUFFIXES = {".tex", ".ltx", ".sty", ".cls"}
@@ -176,6 +192,7 @@ def guard_pdftex_compatibility_for_xelatex(
     text = guard_declare_unicode_character_for_xelatex(text)
     text = guard_microtype_for_xelatex(text)
     text = guard_cjkutf8_for_xelatex(text)
+    text = replace_minted_environment_with_fvextra(text)
     text = replace_bbm_with_dsfont_for_xelatex(text)
     return ensure_iftex_loaded_before_ifpdftex(text)
 
@@ -244,6 +261,25 @@ def _replace_cjkutf8_package(match: re.Match[str]) -> str:
     tail = match.group("tail")
     shim = "\n".join(f"{indent}{line}" for line in CJK_ENVIRONMENT_SHIM.splitlines())
     return f"{shim}{tail}"
+
+
+def replace_minted_environment_with_fvextra(text: str) -> str:
+    """Use a shell-escape-free fallback for plain minted environments."""
+
+    if r"\begin{minted}" not in text or MINTED_PACKAGE_RE.search(text) is None:
+        return text
+    if MINTED_COMMAND_RE.search(text):
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        tail = match.group("tail")
+        fallback = "\n".join(
+            f"{indent}{line}" for line in MINTED_ENVIRONMENT_FALLBACK.splitlines()
+        )
+        return f"{fallback}{tail}"
+
+    return MINTED_PACKAGE_RE.sub(replace, text, count=1)
 
 
 def remove_blank_lines_in_multiline_usepackage_options(text: str) -> str:
