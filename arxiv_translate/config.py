@@ -52,6 +52,21 @@ def config_string(
     raise ArxivTranslateError(f"missing required config field: {key}")
 
 
+def config_bool(
+    config: dict[str, Any],
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    if key not in config:
+        return default
+    value = config[key]
+    if isinstance(value, bool):
+        return value
+    raise ArxivTranslateError(f"config field must be true or false: {key}")
+
+
 def _validate_config(config: dict[str, Any]) -> None:
     for key in REQUIRED_CONFIG_FIELDS:
         config_string(config, key, allow_empty=key == "deepseek_api_key")
+    config_bool(config, "use_proxy", default=True)

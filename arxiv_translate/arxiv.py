@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .errors import InvalidArxivLinkError, SourceUnavailableError
+from .network import urlopen
 
 
 NEW_ID_RE = re.compile(r"(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)")
@@ -63,7 +64,13 @@ def pdf_url(arxiv_id: str) -> str:
     return f"https://arxiv.org/pdf/{arxiv_id}"
 
 
-def download_pdf(arxiv_id: str, destination: Path, timeout: int = 60) -> Path:
+def download_pdf(
+    arxiv_id: str,
+    destination: Path,
+    timeout: int = 60,
+    *,
+    use_proxy: bool = True,
+) -> Path:
     """Download the original arXiv PDF."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -76,16 +83,17 @@ def download_pdf(arxiv_id: str, destination: Path, timeout: int = 60) -> Path:
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout, use_proxy=use_proxy) as response:
             content_type = response.headers.get("Content-Type", "")
             body = response.read()
     except urllib.error.HTTPError as exc:
         raise SourceUnavailableError(
             f"failed to download arXiv PDF for {arxiv_id}: HTTP {exc.code}"
         ) from exc
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
         raise SourceUnavailableError(
-            f"failed to download arXiv PDF for {arxiv_id}: {exc.reason}"
+            f"failed to download arXiv PDF for {arxiv_id}: {reason}"
         ) from exc
 
     if not body:
@@ -97,7 +105,13 @@ def download_pdf(arxiv_id: str, destination: Path, timeout: int = 60) -> Path:
     return destination
 
 
-def download_source(arxiv_id: str, destination: Path, timeout: int = 60) -> Path:
+def download_source(
+    arxiv_id: str,
+    destination: Path,
+    timeout: int = 60,
+    *,
+    use_proxy: bool = True,
+) -> Path:
     """Download the arXiv e-print source archive."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +124,7 @@ def download_source(arxiv_id: str, destination: Path, timeout: int = 60) -> Path
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout, use_proxy=use_proxy) as response:
             content_type = response.headers.get("Content-Type", "")
             body = response.read()
     except urllib.error.HTTPError as exc:
@@ -121,9 +135,10 @@ def download_source(arxiv_id: str, destination: Path, timeout: int = 60) -> Path
         raise SourceUnavailableError(
             f"failed to download arXiv source for {arxiv_id}: HTTP {exc.code}"
         ) from exc
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
         raise SourceUnavailableError(
-            f"failed to download arXiv source for {arxiv_id}: {exc.reason}"
+            f"failed to download arXiv source for {arxiv_id}: {reason}"
         ) from exc
 
     if not body:

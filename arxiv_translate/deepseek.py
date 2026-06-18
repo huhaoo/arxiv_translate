@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .errors import DeepSeekError
+from .network import urlopen
 from .preferred_translations import format_preferred_translations_for_prompt
 from .preserved_terms import format_preserved_terms_for_prompt, strip_preserved_terms
 
@@ -110,6 +111,7 @@ class DeepSeekClient:
     temperature: float = 0.2
     retries: int = 3
     untranslated_retries: int = 5
+    use_proxy: bool = True
     warning_logger: Callable[[str], None] | None = None
 
     def translate_latex(
@@ -193,7 +195,11 @@ class DeepSeekClient:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urlopen(
+                request,
+                timeout=self.timeout,
+                use_proxy=self.use_proxy,
+            ) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .arxiv import download_pdf, download_source, parse_arxiv_id
 from .compiler import compile_latex
-from .config import DEFAULT_CONFIG_PATH, config_string, load_config
+from .config import DEFAULT_CONFIG_PATH, config_bool, config_string, load_config
 from .deepseek import DeepSeekClient
 from .endnote import write_endnote_import
 from .errors import ArxivTranslateError, SourceUnavailableError
@@ -229,11 +229,16 @@ def run(args: argparse.Namespace) -> int:
         guide_path.unlink(missing_ok=True)
 
     config = load_config(args.config)
+    use_proxy = config_bool(config, "use_proxy", default=True)
 
     cache = TranslationCache(job_dir / "translation-cache.json")
 
     print(f"[1/6] arXiv id: {arxiv_id}")
-    metadata = fetch_arxiv_metadata(arxiv_id)
+    print(
+        "      network: "
+        + ("environment proxy" if use_proxy else "direct (proxy disabled)")
+    )
+    metadata = fetch_arxiv_metadata(arxiv_id, use_proxy=use_proxy)
     print(f"      title: {metadata.title}")
     if resume_from_translated:
         print(f"[2/6] reusing existing original PDF: {_display_path(job_dir)}")
@@ -247,12 +252,12 @@ def run(args: argparse.Namespace) -> int:
         print(f"      translated {len(translated_files)} file(s) already present")
     else:
         print(f"[2/6] downloading original PDF: {_display_path(job_dir)}")
-        download_pdf(arxiv_id, original_pdf_path)
+        download_pdf(arxiv_id, original_pdf_path, use_proxy=use_proxy)
         _print_file_output("original PDF", original_pdf_path, job_dir)
 
         print("[3/6] downloading and extracting TeX source")
         try:
-            download_source(arxiv_id, archive_path)
+            download_source(arxiv_id, archive_path, use_proxy=use_proxy)
             tex_files = extract_source(archive_path, source_dir)
         except SourceUnavailableError as exc:
             print(f"      TeX source unavailable: {exc}")
@@ -281,12 +286,14 @@ def run(args: argparse.Namespace) -> int:
             config,
             model_key="deepseek_model",
             timeout=args.timeout,
+            use_proxy=use_proxy,
             warning_logger=warning_collector.add,
         )
         appendix_client = _build_deepseek_client(
             config,
             model_key="deepseek_appendix_model",
             timeout=args.timeout,
+            use_proxy=use_proxy,
             warning_logger=warning_collector.add,
         )
         translated_files = translate_tex_tree(
@@ -378,6 +385,7 @@ def _build_deepseek_client(
     *,
     model_key: str,
     timeout: int,
+    use_proxy: bool,
     warning_logger=None,
 ) -> DeepSeekClient:
     return DeepSeekClient(
@@ -389,6 +397,7 @@ def _build_deepseek_client(
         model=config_string(config, model_key),
         base_url=config_string(config, "deepseek_base_url"),
         timeout=timeout,
+        use_proxy=use_proxy,
         warning_logger=warning_logger,
     )
 

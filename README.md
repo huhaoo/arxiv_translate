@@ -27,9 +27,13 @@
   "deepseek_api_key": "sk-your-deepseek-api-key",
   "deepseek_model": "deepseek-v4-pro",
   "deepseek_appendix_model": "deepseek-v4-flash",
-  "deepseek_base_url": "https://api.deepseek.com/chat/completions"
+  "deepseek_base_url": "https://api.deepseek.com/chat/completions",
+  "use_proxy": true
 }
 ```
+
+`use_proxy` 默认为 `true`，使用系统环境中的 HTTP/HTTPS 代理。设为
+`false` 时，arXiv 元数据、BibTeX、PDF、源文件和 DeepSeek 请求都会绕过代理。
 
 两个模型字段共用同一个 API key 和接口地址，分别用于正文和附录翻译。请求失败时会按单个客户端的重试策略重试，不再切换到其他 API 配置。
 

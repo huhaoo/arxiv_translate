@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from xml.etree import ElementTree
 
 from .errors import ArxivTranslateError
+from .network import urlopen
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ARXIV_BIBTEX_URL = "https://arxiv.org/bibtex"
@@ -40,7 +41,12 @@ class ArxivMetadata:
         return self.published[:4]
 
 
-def fetch_arxiv_metadata(arxiv_id: str, timeout: int = 30) -> ArxivMetadata:
+def fetch_arxiv_metadata(
+    arxiv_id: str,
+    timeout: int = 30,
+    *,
+    use_proxy: bool = True,
+) -> ArxivMetadata:
     query = urllib.parse.urlencode({"id_list": arxiv_id})
     request = urllib.request.Request(
         f"{ARXIV_API_URL}?{query}",
@@ -48,25 +54,35 @@ def fetch_arxiv_metadata(arxiv_id: str, timeout: int = 30) -> ArxivMetadata:
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout, use_proxy=use_proxy) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
         raise ArxivTranslateError(
             f"failed to fetch arXiv metadata for {arxiv_id}: HTTP {exc.code}"
         ) from exc
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
         raise ArxivTranslateError(
-            f"failed to fetch arXiv metadata for {arxiv_id}: {exc.reason}"
+            f"failed to fetch arXiv metadata for {arxiv_id}: {reason}"
         ) from exc
 
     metadata = parse_arxiv_metadata(body, arxiv_id)
     return replace(
         metadata,
-        citation_key=fetch_arxiv_bibtex_key(arxiv_id, timeout=timeout),
+        citation_key=fetch_arxiv_bibtex_key(
+            arxiv_id,
+            timeout=timeout,
+            use_proxy=use_proxy,
+        ),
     )
 
 
-def fetch_arxiv_bibtex_key(arxiv_id: str, timeout: int = 30) -> str:
+def fetch_arxiv_bibtex_key(
+    arxiv_id: str,
+    timeout: int = 30,
+    *,
+    use_proxy: bool = True,
+) -> str:
     encoded_id = urllib.parse.quote(arxiv_id, safe="/")
     request = urllib.request.Request(
         f"{ARXIV_BIBTEX_URL}/{encoded_id}",
@@ -74,15 +90,16 @@ def fetch_arxiv_bibtex_key(arxiv_id: str, timeout: int = 30) -> str:
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout, use_proxy=use_proxy) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
         raise ArxivTranslateError(
             f"failed to fetch arXiv BibTeX citation for {arxiv_id}: HTTP {exc.code}"
         ) from exc
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
         raise ArxivTranslateError(
-            f"failed to fetch arXiv BibTeX citation for {arxiv_id}: {exc.reason}"
+            f"failed to fetch arXiv BibTeX citation for {arxiv_id}: {reason}"
         ) from exc
 
     return parse_bibtex_key(body.decode("utf-8", errors="replace"), arxiv_id)
