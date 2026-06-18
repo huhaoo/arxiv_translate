@@ -6,6 +6,10 @@ from pathlib import Path
 
 DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}")
 PDFOUTPUT_RE = re.compile(r"(?m)^(?P<indent>\s*)\\pdfoutput\s*=\s*(?P<value>\d+)\s*$")
+PDFMINORVERSION_RE = re.compile(
+    r"^\s*\\pdfminorversion\s*=\s*\d+\s*(?:%[^\r\n]*)?$"
+)
+PDFTEX_ASSIGNMENT_RE = re.compile(r"^\s*\\(?:pdfoutput|pdfminorversion)\b")
 BBM_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?P<options>\[[^\]]*\])?\{bbm\}(?P<tail>\s*(?:%.*)?)$"
 )
@@ -168,6 +172,7 @@ def guard_pdftex_compatibility_for_xelatex(
     text = prefer_numeric_natbib_for_numeric_bibliography_styles(text)
     text = prefer_fandol_ctex_for_xelatex(text)
     text = guard_pdfoutput_for_xelatex(text)
+    text = guard_pdfminorversion_for_xelatex(text)
     text = guard_declare_unicode_character_for_xelatex(text)
     text = guard_microtype_for_xelatex(text)
     text = guard_cjkutf8_for_xelatex(text)
@@ -192,6 +197,14 @@ def guard_pdfoutput_for_xelatex(text: str) -> str:
         return f"{indent}\\ifPDFTeX\n{indent}\\pdfoutput={value}\n{indent}\\fi"
 
     return PDFOUTPUT_RE.sub(replace, text)
+
+
+def guard_pdfminorversion_for_xelatex(text: str) -> str:
+    """Wrap bare pdfTeX-only \\pdfminorversion assignments for XeLaTeX."""
+
+    if "\\pdfminorversion" not in text:
+        return text
+    return _guard_lines_for_pdftex(text, PDFMINORVERSION_RE)
 
 
 def guard_declare_unicode_character_for_xelatex(text: str) -> str:
@@ -478,7 +491,15 @@ def replace_px_units_with_pt(text: str) -> str:
 def escape_unescaped_numeric_percentages(text: str) -> str:
     """Escape bare percent signs in numeric percentages accidentally emitted by translation."""
 
-    return re.sub(r"(?<!\\)(\d)\s*%(?=[ \t]*(?:\S|\r?\n|$))", r"\1\\%", text)
+    output: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if PDFTEX_ASSIGNMENT_RE.match(line):
+            output.append(line)
+            continue
+        output.append(
+            re.sub(r"(?<!\\)(\d)\s*%(?=[ \t]*(?:\S|\r?\n|$))", r"\1\\%", line)
+        )
+    return "".join(output)
 
 
 def close_unclosed_preamble_single_line_commands(text: str) -> str:
