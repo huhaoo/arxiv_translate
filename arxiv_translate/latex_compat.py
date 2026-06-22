@@ -41,6 +41,24 @@ PASS_OPTIONS_RE = re.compile(
     r"\{(?P<options>[^\r\n]*)\}\{(?P<package>[^{}\s,]+)\}"
     r"(?P<tail>[ \t]*(?:%[^\r\n]*)?)(?P<newline>\r?\n|$)"
 )
+GRAPHICS_DRIVER_OPTIONS = {
+    "dvipdf",
+    "dvipdfm",
+    "dvipdfmx",
+    "dvips",
+    "dvipsone",
+    "dviwin",
+    "emtex",
+    "luatex",
+    "pdftex",
+    "pctex32",
+    "pctexhp",
+    "pctexps",
+    "textures",
+    "truetex",
+    "vtex",
+    "xetex",
+}
 TEX_IF_RE = re.compile(r"^\\if[A-Za-z@]*(?=\s|\\|$)")
 PDFTEX_GUARDED_PDFOUTPUT_RE = re.compile(
     r"\\ifPDFTeX\s*\\pdfoutput\s*=\s*\d+\s*\\fi",
@@ -185,6 +203,7 @@ def guard_pdftex_compatibility_for_xelatex(
     if file_suffix in {".tex", ".ltx"}:
         text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
+    text = remove_explicit_graphics_driver_options(text)
     text = replace_soul_highlight_for_xelatex(text)
     text = normalize_duplicate_package_loads(text)
     text = downgrade_unaligned_align_environments(text)
@@ -359,6 +378,52 @@ def remove_blank_lines_in_multiline_usepackage_options(text: str) -> str:
         if inside_usepackage_options and re.match(r"^\s*\]\s*\{[^}]+\}", line):
             inside_usepackage_options = False
     return "".join(output)
+
+
+def remove_explicit_graphics_driver_options(text: str) -> str:
+    """Let XeLaTeX select the graphics driver instead of forcing another engine."""
+
+    def replace_package(match: re.Match[str]) -> str:
+        packages = _package_names(match)
+        if not {"graphics", "graphicx"}.intersection(packages):
+            return match.group(0)
+        options = _split_top_level_commas(match.group("options") or "")
+        retained = [
+            option
+            for option in options
+            if option.strip().lower() not in GRAPHICS_DRIVER_OPTIONS
+        ]
+        if len(retained) == len(options):
+            return match.group(0)
+        option_text = f"[{','.join(retained)}]" if retained else ""
+        return (
+            f"{match.group('indent')}\\{match.group('command')}{option_text}"
+            f"{{{match.group('packages')}}}{match.group('tail')}"
+            f"{match.group('newline')}"
+        )
+
+    text = PACKAGE_LOAD_RE.sub(replace_package, text)
+
+    def replace_pass_options(match: re.Match[str]) -> str:
+        if match.group("package").strip() not in {"graphics", "graphicx"}:
+            return match.group(0)
+        options = _split_top_level_commas(match.group("options"))
+        retained = [
+            option
+            for option in options
+            if option.strip().lower() not in GRAPHICS_DRIVER_OPTIONS
+        ]
+        if len(retained) == len(options):
+            return match.group(0)
+        if not retained:
+            return ""
+        return (
+            f"{match.group('indent')}\\PassOptionsToPackage"
+            f"{{{','.join(retained)}}}{{{match.group('package')}}}"
+            f"{match.group('tail')}{match.group('newline')}"
+        )
+
+    return PASS_OPTIONS_RE.sub(replace_pass_options, text)
 
 
 def normalize_duplicate_package_loads(text: str) -> str:
