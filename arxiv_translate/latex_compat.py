@@ -26,6 +26,10 @@ MINTED_PACKAGE_RE = re.compile(
 MINTED_COMMAND_RE = re.compile(
     r"\\(?:inputminted|mintinline|newminted|newmintinline|newmintedfile)\b"
 )
+SOUL_PACKAGE_RE = re.compile(
+    r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{soul(?:utf8)?\}"
+    r"(?P<tail>\s*(?:%.*)?)$"
+)
 PACKAGE_LOAD_RE = re.compile(
     r"(?m)^(?P<indent>[ \t]*)\\(?P<command>usepackage|RequirePackage)"
     r"[ \t]*(?:\[(?P<options>[^\]]*)\])?[ \t]*"
@@ -58,6 +62,8 @@ MINTED_ENVIRONMENT_FALLBACK = (
     "  \\end{Verbatim}%\n"
     "}"
 )
+DISABLE_LIGATURES_SHIM = r"\providecommand{\DisableLigatures}[2][]{}"
+SOUL_XETEX_HIGHLIGHT_MARKER = "arxiv-translate: XeTeX-safe CJK highlighting"
 DECLARE_UNICODE_CHARACTER_RE = re.compile(r"^\s*\\DeclareUnicodeCharacter\b")
 LATEX_COMPAT_SUFFIXES = {".tex", ".ltx", ".sty", ".cls"}
 STANDARD_ZERO_ARG_MACROS = {
@@ -179,6 +185,7 @@ def guard_pdftex_compatibility_for_xelatex(
     if file_suffix in {".tex", ".ltx"}:
         text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
+    text = replace_soul_highlight_for_xelatex(text)
     text = normalize_duplicate_package_loads(text)
     text = downgrade_unaligned_align_environments(text)
     text = remove_blank_lines_in_math_environments(text)
@@ -239,7 +246,17 @@ def guard_microtype_for_xelatex(text: str) -> str:
     if "\\usepackage{microtype}" not in text and "{microtype}" not in text:
         return text
 
-    return _guard_lines_for_pdftex(text, MICROTYPE_PACKAGE_RE)
+    text = _guard_lines_for_pdftex(text, MICROTYPE_PACKAGE_RE)
+    if (
+        r"\DisableLigatures" in text
+        and DISABLE_LIGATURES_SHIM not in text
+    ):
+        text = text.replace(
+            r"\DisableLigatures",
+            DISABLE_LIGATURES_SHIM + "\n" + r"\DisableLigatures",
+            1,
+        )
+    return text
 
 
 def guard_cjkutf8_for_xelatex(text: str) -> str:
@@ -280,6 +297,50 @@ def replace_minted_environment_with_fvextra(text: str) -> str:
         return f"{fallback}{tail}"
 
     return MINTED_PACKAGE_RE.sub(replace, text, count=1)
+
+
+def replace_soul_highlight_for_xelatex(text: str) -> str:
+    """Use color boxes when soul highlighting would parse CJK text."""
+
+    if (
+        r"\hl{" not in text
+        and r"\soulhl{" not in text
+    ):
+        return text
+    if (
+        SOUL_PACKAGE_RE.search(text) is None
+        or SOUL_XETEX_HIGHLIGHT_MARKER in text
+        or not _contains_cjk_character(text)
+    ):
+        return text
+    command = "soulhl" if r"\soulhl{" in text else "hl"
+    shim = (
+        "% arxiv-translate: XeTeX-safe CJK highlighting\n"
+        "\\RequirePackage{xcolor}\n"
+        "\\def\\AXTHighlightColor{yellow}\n"
+        "\\AtBeginDocument{%\n"
+        "  \\renewcommand{\\sethlcolor}[1]{\\def\\AXTHighlightColor{#1}}%\n"
+        f"  \\renewcommand{{\\{command}}}[1]"
+        "{\\colorbox{\\AXTHighlightColor}{#1}}%\n"
+        "}"
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        return (
+            match.group(0)
+            + "\n"
+            + shim
+        )
+
+    return SOUL_PACKAGE_RE.sub(replace, text, count=1)
+
+
+def _contains_cjk_character(text: str) -> bool:
+    return any(
+        "\u3400" <= char <= "\u9fff"
+        or "\uf900" <= char <= "\ufaff"
+        for char in text
+    )
 
 
 def remove_blank_lines_in_multiline_usepackage_options(text: str) -> str:

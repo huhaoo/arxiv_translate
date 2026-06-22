@@ -652,6 +652,13 @@ def _is_safe_latex_boundary(text: str) -> bool:
             i += len(r"\end{") + len(end_env) + 1
             continue
 
+        if text.startswith(r"\\", i):
+            i += 2
+            if i < len(text) and text[i] == "[":
+                optional_end = _find_balanced_end(text, i, "[", "]")
+                if optional_end is not None:
+                    i = optional_end
+            continue
         if text.startswith(r"\(", i):
             slash_math = "paren"
             i += 2

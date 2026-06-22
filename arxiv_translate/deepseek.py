@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from socket import timeout as SocketTimeout
+from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
 
@@ -29,6 +30,7 @@ STRUCTURAL_IDENTIFIER_ARG_RE = re.compile(
     r")\{(?P<arg>[^{}]*)\}"
 )
 ENVIRONMENT_BOUNDARY_RE = re.compile(r"\\(?P<command>begin|end)\{(?P<name>[^{}]+)\}")
+LATEX_COMMAND_RE = re.compile(r"(?<!\\)\\(?P<name>[A-Za-z@]+)")
 UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
@@ -239,6 +241,7 @@ def validate_translation_response(
     validate_translation_protocol(content)
     validate_latex_braces_balanced(content)
     validate_environment_boundaries_preserved(content, source_fragment)
+    validate_latex_commands_preserved(content, source_fragment)
     return content
 
 
@@ -341,6 +344,46 @@ def _is_escaped_character(text: str, index: int) -> bool:
         backslashes += 1
         cursor -= 1
     return backslashes % 2 == 1
+
+
+def validate_latex_commands_preserved(
+    content: str,
+    source_fragment: str,
+) -> None:
+    """Reject translations that add, remove, or rename LaTeX commands."""
+
+    if not source_fragment:
+        return
+    source_commands = _latex_commands(source_fragment)
+    translated_commands = _latex_commands(content)
+    source_counts = Counter(source_commands)
+    translated_counts = Counter(translated_commands)
+    if translated_counts == source_counts:
+        return
+    missing = list((source_counts - translated_counts).elements())
+    added = list((translated_counts - source_counts).elements())
+    missing_summary = ", ".join(f"\\{name}" for name in missing[:5]) or "none"
+    added_summary = ", ".join(f"\\{name}" for name in added[:5]) or "none"
+    raise DeepSeekError(
+        "DeepSeek translation changed LaTeX commands: "
+        f"missing {missing_summary}; added {added_summary} "
+        f"(source count {len(source_commands)}, output count "
+        f"{len(translated_commands)})",
+        retryable=True,
+        protocol_violation=True,
+    )
+
+
+def _latex_commands(content: str) -> list[str]:
+    commands: list[str] = []
+    for line in content.splitlines():
+        visible = line
+        for index, char in enumerate(line):
+            if char == "%" and not _is_escaped_character(line, index):
+                visible = line[:index]
+                break
+        commands.extend(match.group("name") for match in LATEX_COMMAND_RE.finditer(visible))
+    return commands
 
 
 def validate_translation_protocol(content: str) -> None:
