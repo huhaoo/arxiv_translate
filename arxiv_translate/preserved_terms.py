@@ -4,6 +4,8 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from .utils import unique_preserving_order
+
 PRESERVED_TERMS_PATH = Path(__file__).with_name("terminology") / "preserved_terms.md"
 DEFAULT_PRESERVED_TERMS = (
     "token",
@@ -32,7 +34,7 @@ def load_preserved_terms() -> tuple[str, ...]:
 
     if not terms:
         return DEFAULT_PRESERVED_TERMS
-    return tuple(_dedupe_preserving_order(terms))
+    return tuple(unique_preserving_order(terms, key=str.casefold))
 
 
 def format_preserved_terms_for_prompt() -> str:
@@ -56,15 +58,3 @@ def strip_preserved_terms(content: str) -> str:
         pattern = re.compile(rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])", re.IGNORECASE)
         stripped = pattern.sub(" ", stripped)
     return stripped
-
-
-def _dedupe_preserving_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for value in values:
-        key = value.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(value)
-    return deduped

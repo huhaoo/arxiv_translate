@@ -21,6 +21,7 @@ from .latex_compat import ensure_chinese_latex_support, ensure_latex_compatibili
 from .links import path_uri
 from .metadata import fetch_arxiv_metadata
 from .paths import DEFAULT_OUTPUT_DIR, make_job_dir
+from .source_files import contains_latex_document, iter_latex_documents
 from .tex import (
     discover_main_tex,
     ensure_english_pdf_title,
@@ -244,11 +245,11 @@ def run(args: argparse.Namespace) -> int:
         print(f"[2/6] reusing existing original PDF: {_display_path(job_dir)}")
         _print_file_output("original PDF", original_pdf_path, job_dir)
         print("[3/6] reusing extracted TeX source")
-        tex_files = list(source_dir.rglob("*.tex")) + list(source_dir.rglob("*.ltx"))
+        tex_files = list(iter_latex_documents(source_dir))
         print(f"      found {len(tex_files)} TeX file(s)")
         original_main_tex = discover_main_tex(source_dir, args.main)
         print("[4/6] reusing translated TeX files after DeepSeek")
-        translated_files = list(translated_dir.rglob("*.tex")) + list(translated_dir.rglob("*.ltx"))
+        translated_files = list(iter_latex_documents(translated_dir))
         print(f"      translated {len(translated_files)} file(s) already present")
     else:
         print(f"[2/6] downloading original PDF: {_display_path(job_dir)}")
@@ -490,10 +491,7 @@ def _can_resume_from_translated(source_dir: Path, translated_dir: Path) -> bool:
 def _contains_tex_files(path: Path) -> bool:
     if not path.exists():
         return False
-    return any(
-        item.is_file() and item.suffix.lower() in {".tex", ".ltx"}
-        for item in path.rglob("*")
-    )
+    return contains_latex_document(path)
 
 
 def _load_interactive_history(path: Path) -> list[str]:

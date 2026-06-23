@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .errors import DeepSeekError
+from .latex_scan import is_escaped, visible_latex_line
 from .network import urlopen
 from .preferred_translations import format_preferred_translations_for_prompt
 from .preserved_terms import format_preserved_terms_for_prompt, strip_preserved_terms
@@ -326,25 +327,12 @@ def validate_environment_boundaries_preserved(
 def _environment_boundaries(content: str) -> list[tuple[str, str]]:
     boundaries: list[tuple[str, str]] = []
     for line in content.splitlines():
-        visible = line
-        for index, char in enumerate(line):
-            if char == "%" and not _is_escaped_character(line, index):
-                visible = line[:index]
-                break
+        visible = visible_latex_line(line)
         boundaries.extend(
             (match.group("command"), match.group("name"))
             for match in ENVIRONMENT_BOUNDARY_RE.finditer(visible)
         )
     return boundaries
-
-
-def _is_escaped_character(text: str, index: int) -> bool:
-    backslashes = 0
-    cursor = index - 1
-    while cursor >= 0 and text[cursor] == "\\":
-        backslashes += 1
-        cursor -= 1
-    return backslashes % 2 == 1
 
 
 def validate_latex_commands_preserved(
@@ -378,11 +366,7 @@ def validate_latex_commands_preserved(
 def _latex_commands(content: str) -> list[str]:
     commands: list[str] = []
     for line in content.splitlines():
-        visible = line
-        for index, char in enumerate(line):
-            if char == "%" and not _is_escaped_character(line, index):
-                visible = line[:index]
-                break
+        visible = visible_latex_line(line)
         commands.extend(match.group("name") for match in LATEX_COMMAND_RE.finditer(visible))
     return commands
 
@@ -411,9 +395,9 @@ def _unescaped_character_count(content: str, target: str) -> int:
     count = 0
     for line in content.splitlines():
         for index, char in enumerate(line):
-            if char == "%" and not _is_escaped_character(line, index):
+            if char == "%" and not is_escaped(line, index):
                 break
-            if char == target and not _is_escaped_character(line, index):
+            if char == target and not is_escaped(line, index):
                 count += 1
     return count
 

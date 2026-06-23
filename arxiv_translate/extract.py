@@ -8,8 +8,9 @@ from io import BytesIO
 from pathlib import Path
 
 from .errors import SourceUnavailableError
+from .source_files import LATEX_DOCUMENT_SUFFIXES, iter_latex_documents
 
-TEX_SUFFIXES = {".tex", ".ltx"}
+TEX_SUFFIXES = LATEX_DOCUMENT_SUFFIXES
 
 
 def extract_source(archive_path: Path, output_dir: Path) -> list[Path]:
@@ -112,11 +113,7 @@ def _looks_like_tex(raw: bytes) -> bool:
 
 
 def _require_tex_files(output_dir: Path) -> list[Path]:
-    tex_files = [
-        path
-        for path in output_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in TEX_SUFFIXES
-    ]
+    tex_files = list(iter_latex_documents(output_dir))
     if not tex_files:
         raise SourceUnavailableError("arXiv source package contains no .tex/.ltx files")
     return sorted(tex_files)

@@ -4,6 +4,13 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from .latex_scan import contains_unescaped, line_ending
+from .source_files import (
+    LATEX_DEFINITION_SUFFIXES,
+    LATEX_DOCUMENT_SUFFIXES,
+    iter_source_files,
+)
+
 DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}")
 PDFOUTPUT_RE = re.compile(r"(?m)^(?P<indent>\s*)\\pdfoutput\s*=\s*(?P<value>\d+)\s*$")
 PDFMINORVERSION_RE = re.compile(
@@ -83,7 +90,7 @@ MINTED_ENVIRONMENT_FALLBACK = (
 DISABLE_LIGATURES_SHIM = r"\providecommand{\DisableLigatures}[2][]{}"
 SOUL_XETEX_HIGHLIGHT_MARKER = "arxiv-translate: XeTeX-safe CJK highlighting"
 DECLARE_UNICODE_CHARACTER_RE = re.compile(r"^\s*\\DeclareUnicodeCharacter\b")
-LATEX_COMPAT_SUFFIXES = {".tex", ".ltx", ".sty", ".cls"}
+LATEX_COMPAT_SUFFIXES = LATEX_DEFINITION_SUFFIXES
 STANDARD_ZERO_ARG_MACROS = {
     "bfseries",
     "centering",
@@ -164,11 +171,7 @@ def ensure_chinese_latex_support(main_tex: Path) -> bool:
 def ensure_latex_compatibility(root: Path) -> list[Path]:
     """Apply XeLaTeX compatibility fixes to every TeX file in a source tree."""
 
-    tex_files = [
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in LATEX_COMPAT_SUFFIXES
-    ]
+    tex_files = list(iter_source_files(root, LATEX_DEFINITION_SUFFIXES))
     tree_texts = [
         path.read_text(encoding="utf-8", errors="ignore") for path in tex_files
     ]
@@ -200,7 +203,7 @@ def guard_pdftex_compatibility_for_xelatex(
 ) -> str:
     """Guard common pdfTeX-only preamble commands before XeLaTeX compilation."""
 
-    if file_suffix in {".tex", ".ltx"}:
+    if file_suffix in LATEX_DOCUMENT_SUFFIXES:
         text = escape_unescaped_numeric_percentages(text)
     text = remove_blank_lines_in_multiline_usepackage_options(text)
     text = remove_explicit_graphics_driver_options(text)
@@ -609,7 +612,7 @@ def downgrade_unaligned_align_environments(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         environment = match.group(1)
         body = match.group(2)
-        if _has_unescaped_ampersand(body):
+        if contains_unescaped(body, "&"):
             return match.group(0)
         replacement = "equation*" if environment.endswith("*") else "equation"
         return f"\\begin{{{replacement}}}{body}\\end{{{replacement}}}"
@@ -674,7 +677,7 @@ def close_unclosed_preamble_single_line_commands(text: str) -> str:
         if re.match(r"^\s*\\(?:title|date)\{", line):
             missing = _missing_closing_braces(line)
             if missing > 0 and _next_nonblank_is_preamble_boundary(lines, index + 1):
-                ending = _line_ending(line)
+                ending = line_ending(line)
                 body = line[: -len(ending)] if ending else line
                 fixed = body.rstrip() + ("}" * missing) + ending
         output.append(fixed)
@@ -778,16 +781,6 @@ def _next_nonblank_is_preamble_boundary(lines: list[str], start: int) -> bool:
     return False
 
 
-def _line_ending(line: str) -> str:
-    if line.endswith("\r\n"):
-        return "\r\n"
-    if line.endswith("\n"):
-        return "\n"
-    if line.endswith("\r"):
-        return "\r"
-    return ""
-
-
 def ensure_iftex_loaded_before_ifpdftex(text: str) -> str:
     """Define \\ifPDFTeX before any guarded pdfTeX-only commands use it."""
 
@@ -810,20 +803,6 @@ def _first_iftex_load_index(text: str) -> int:
         if index != -1
     ]
     return min(matches) if matches else -1
-
-
-def _has_unescaped_ampersand(text: str) -> bool:
-    for index, char in enumerate(text):
-        if char != "&":
-            continue
-        backslashes = 0
-        cursor = index - 1
-        while cursor >= 0 and text[cursor] == "\\":
-            backslashes += 1
-            cursor -= 1
-        if backslashes % 2 == 0:
-            return True
-    return False
 
 
 def _guard_lines_for_pdftex(text: str, pattern: re.Pattern[str]) -> str:

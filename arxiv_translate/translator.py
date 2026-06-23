@@ -13,6 +13,7 @@ from .deepseek import DeepSeekClient, validate_translation_response
 from .errors import DeepSeekError
 from .preferred_translations import load_preferred_translations
 from .preserved_terms import load_preserved_terms
+from .source_files import iter_latex_documents
 from .tex import (
     protect_latex_text_boxes,
     normalize_latex_text_accents,
@@ -68,11 +69,7 @@ def translate_tex_tree(
     context_chars = max(0, context_chars)
     parallel_chunks = max(1, parallel_chunks)
     translated: list[Path] = []
-    tex_files = [
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".tex", ".ltx"}
-    ]
+    tex_files = list(iter_latex_documents(root))
 
     jobs: list[tuple[Path, str, list[str], list[str]]] = []
     for path in tex_files:

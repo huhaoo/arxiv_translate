@@ -3,13 +3,19 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .latex_scan import balanced_group_end, is_escaped, skip_whitespace
 from .metadata import ArxivMetadata
 from .preferred_translations import append_preferred_translations_section
 from .preserved_terms import append_preserved_terms_section
+from .source_files import (
+    LATEX_DEFINITION_SUFFIXES,
+    LATEX_DOCUMENT_SUFFIXES,
+    iter_latex_documents,
+    iter_source_files,
+)
 from .tex import strip_latex_comments
+from .utils import unique_preserving_order
 
-LATEX_DOCUMENT_SUFFIXES = {".tex", ".ltx"}
-LATEX_DEFINITION_SUFFIXES = LATEX_DOCUMENT_SUFFIXES | {".sty", ".cls"}
 PREDEFINED_COMMANDS_HEADING = "## Predefined LaTeX Commands"
 SECTION_COMMAND_RE = re.compile(
     r"\\(?P<level>part|chapter|section|subsection|subsubsection)\*?\s*\{"
@@ -52,9 +58,7 @@ def generate_template_paper_guide(
 
 def _collect_source_texts(source_dir: Path) -> dict[Path, str]:
     texts: dict[Path, str] = {}
-    for path in sorted(source_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in LATEX_DOCUMENT_SUFFIXES:
-            continue
+    for path in iter_latex_documents(source_dir):
         texts[path] = strip_latex_comments(
             path.read_text(encoding="utf-8", errors="ignore")
         )
@@ -185,7 +189,7 @@ def _render_arxiv_metadata_sections(metadata: ArxivMetadata | None) -> str:
         return ""
 
     sections: list[str] = []
-    categories = _unique_preserving_order(
+    categories = unique_preserving_order(
         [
             category
             for category in [metadata.primary_category, *metadata.categories]
@@ -226,7 +230,7 @@ def _extract_sections(
     for text in source_texts.values():
         for match in SECTION_COMMAND_RE.finditer(text):
             brace_start = match.end() - 1
-            brace_end = _balanced_group_end(text, brace_start, "{", "}")
+            brace_end = balanced_group_end(text, brace_start, "{", "}")
             if brace_end is None:
                 continue
             heading = re.sub(
@@ -247,7 +251,7 @@ def _extract_first_braced_argument(
     if match is None:
         return None
     brace_start = match.end() - 1
-    brace_end = _balanced_group_end(text, brace_start, "{", "}")
+    brace_end = balanced_group_end(text, brace_start, "{", "}")
     if brace_end is None:
         return None
     return re.sub(r"\s+", " ", text[brace_start + 1 : brace_end - 1]).strip()
@@ -271,7 +275,7 @@ def _collect_math_contexts(text: str) -> list[str]:
                 contexts.append(text[position : end + 2])
                 position = end + 2
                 continue
-        if text.startswith("$$", position) and not _is_escaped(text, position):
+        if text.startswith("$$", position) and not is_escaped(text, position):
             end = _find_unescaped_token(text, "$$", position + 2)
             if end >= 0:
                 contexts.append(text[position : end + 2])
@@ -279,7 +283,7 @@ def _collect_math_contexts(text: str) -> list[str]:
                 continue
         if (
             text[position] == "$"
-            and not _is_escaped(text, position)
+            and not is_escaped(text, position)
             and not text.startswith("$$", position)
         ):
             end = _find_unescaped_single_dollar(text, position + 1)
@@ -301,7 +305,7 @@ def _collect_math_contexts(text: str) -> list[str]:
 def _find_unescaped_token(text: str, token: str, start: int) -> int:
     position = text.find(token, start)
     while position >= 0:
-        if not _is_escaped(text, position):
+        if not is_escaped(text, position):
             return position
         position = text.find(token, position + len(token))
     return -1
@@ -311,7 +315,7 @@ def _find_unescaped_single_dollar(text: str, start: int) -> int:
     position = text.find("$", start)
     while position >= 0:
         if (
-            not _is_escaped(text, position)
+            not is_escaped(text, position)
             and not text.startswith("$$", position)
             and (position == 0 or text[position - 1] != "$")
         ):
@@ -324,10 +328,6 @@ def _unique_sorted(values) -> list[str]:
     return sorted(set(values), key=str.casefold)
 
 
-def _unique_preserving_order(values: list[str]) -> list[str]:
-    return list(dict.fromkeys(values))
-
-
 def _inline_code_list(values: list[str]) -> str:
     return ", ".join(f"`{_escape_markdown_code(value)}`" for value in values)
 
@@ -335,11 +335,7 @@ def _inline_code_list(values: list[str]) -> str:
 def collect_predefined_latex_commands(source_dir: Path) -> tuple[str, ...]:
     """Collect user-facing custom command definitions from the paper source."""
 
-    source_files = [
-        path
-        for path in sorted(source_dir.rglob("*"))
-        if path.is_file() and path.suffix.lower() in LATEX_DEFINITION_SUFFIXES
-    ]
+    source_files = list(iter_source_files(source_dir, LATEX_DEFINITION_SUFFIXES))
     texts = {
         path: strip_latex_comments(
             path.read_text(encoding="utf-8", errors="ignore")
@@ -412,7 +408,7 @@ def _parse_command_definition(
     match: re.Match[str],
 ) -> tuple[str, str] | None:
     kind = match.group("kind")
-    position = _skip_whitespace(text, match.end())
+    position = skip_whitespace(text, match.end())
     if kind == "let":
         name_match = re.match(r"\\([A-Za-z@]+)", text[position:])
         if name_match is None or "@" in name_match.group(1):
@@ -429,7 +425,7 @@ def _parse_command_definition(
         body_start = text.find("{", position + name_match.end())
         if body_start < 0:
             return None
-        body_end = _balanced_group_end(text, body_start, "{", "}")
+        body_end = balanced_group_end(text, body_start, "{", "}")
         if body_end is None:
             return None
         return name, text[match.start() : body_end]
@@ -437,15 +433,15 @@ def _parse_command_definition(
     name, position = _parse_declared_command_name(text, position)
     if name is None or "@" in name:
         return None
-    position = _skip_whitespace(text, position)
+    position = skip_whitespace(text, position)
     while position < len(text) and text[position] == "[":
-        optional_end = _balanced_group_end(text, position, "[", "]")
+        optional_end = balanced_group_end(text, position, "[", "]")
         if optional_end is None:
             return None
-        position = _skip_whitespace(text, optional_end)
+        position = skip_whitespace(text, optional_end)
     if position >= len(text) or text[position] != "{":
         return None
-    body_end = _balanced_group_end(text, position, "{", "}")
+    body_end = balanced_group_end(text, position, "{", "}")
     if body_end is None:
         return None
     return name, text[match.start() : body_end]
@@ -458,7 +454,7 @@ def _parse_declared_command_name(
     if position >= len(text):
         return None, position
     if text[position] == "{":
-        group_end = _balanced_group_end(text, position, "{", "}")
+        group_end = balanced_group_end(text, position, "{", "}")
         if group_end is None:
             return None, position
         group = text[position + 1 : group_end - 1].strip()
@@ -471,41 +467,6 @@ def _parse_declared_command_name(
     if name_match is None:
         return None, position
     return name_match.group(1), position + name_match.end()
-
-
-def _balanced_group_end(
-    text: str,
-    start: int,
-    opening: str,
-    closing: str,
-) -> int | None:
-    depth = 0
-    for position in range(start, len(text)):
-        character = text[position]
-        if _is_escaped(text, position):
-            continue
-        if character == opening:
-            depth += 1
-        elif character == closing:
-            depth -= 1
-            if depth == 0:
-                return position + 1
-    return None
-
-
-def _is_escaped(text: str, position: int) -> bool:
-    backslashes = 0
-    position -= 1
-    while position >= 0 and text[position] == "\\":
-        backslashes += 1
-        position -= 1
-    return backslashes % 2 == 1
-
-
-def _skip_whitespace(text: str, position: int) -> int:
-    while position < len(text) and text[position].isspace():
-        position += 1
-    return position
 
 
 def _escape_markdown_code(text: str) -> str:

@@ -3,6 +3,8 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from .utils import unique_preserving_order
+
 PREFERRED_TRANSLATIONS_PATH = (
     Path(__file__).with_name("terminology") / "preferred_translations.md"
 )
@@ -37,7 +39,9 @@ def load_preferred_translations() -> tuple[tuple[str, str], ...]:
 
     if not pairs:
         return DEFAULT_PREFERRED_TRANSLATIONS
-    return tuple(_dedupe_preserving_order(pairs))
+    return tuple(
+        unique_preserving_order(pairs, key=lambda pair: pair[0].casefold())
+    )
 
 
 def format_preferred_translations_for_prompt() -> str:
@@ -59,17 +63,3 @@ def append_preferred_translations_section(guide: str) -> str:
         f"{rows}\n"
     )
     return guide.rstrip() + suffix
-
-
-def _dedupe_preserving_order(
-    values: list[tuple[str, str]],
-) -> list[tuple[str, str]]:
-    seen: set[str] = set()
-    deduped: list[tuple[str, str]] = []
-    for english, chinese in values:
-        key = english.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append((english, chinese))
-    return deduped

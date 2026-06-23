@@ -3,6 +3,18 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .latex_scan import (
+    balanced_group_end,
+    is_escaped,
+    line_ending,
+    skip_whitespace,
+)
+from .source_files import (
+    LATEX_STYLE_SUFFIXES,
+    iter_latex_documents,
+    iter_source_files,
+)
+
 VERBATIM_ENVIRONMENTS = {
     "alltt",
     "filecontents",
@@ -13,7 +25,6 @@ VERBATIM_ENVIRONMENTS = {
     "verbatim",
 }
 BEGIN_ENV_RE = re.compile(r"\\begin\{([^}]+)\}")
-END_ENV_RE = re.compile(r"\\end\{([^}]+)\}")
 TITLE_COMMAND_RE = re.compile(r"(?<!\\)\\title\b")
 PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{")
 HYPERREF_PACKAGE_RE = re.compile(
@@ -99,9 +110,7 @@ def discover_main_tex(root: Path, explicit: str | None = None) -> Path:
         return main
 
     candidates: list[tuple[int, Path]] = []
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in {".tex", ".ltx"}:
-            continue
+    for path in iter_latex_documents(root):
         text = path.read_text(encoding="utf-8", errors="ignore")
         score = 0
         if "\\documentclass" in text:
@@ -279,7 +288,7 @@ def _find_text_box_spans(text: str) -> list[tuple[int, int]]:
         if required_args is None:
             index += len(match.group(0))
             continue
-        end = _parse_box_command_end(text, index + len(match.group(0)), required_args)
+        end = _parse_command_end(text, index + len(match.group(0)), required_args)
         if end is None:
             index += len(match.group(0))
             continue
@@ -313,26 +322,22 @@ def _find_glossary_key_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _parse_box_command_end(text: str, start: int, required_args: int) -> int | None:
-    return _parse_command_end(text, start, required_args)
-
-
 def _parse_command_end(text: str, start: int, required_args: int) -> int | None:
     index = start
     required_seen = 0
     while index < len(text):
-        index = _skip_whitespace(text, index)
+        index = skip_whitespace(text, index)
         if index >= len(text):
             return None
         if text[index] == "[":
-            end = _find_balanced_end(text, index, "[", "]")
+            end = balanced_group_end(text, index, "[", "]")
             if end is None:
                 return None
             index = end
             continue
         if text[index] != "{":
             return None
-        end = _find_balanced_end(text, index, "{", "}")
+        end = balanced_group_end(text, index, "{", "}")
         if end is None:
             return None
         required_seen += 1
@@ -426,14 +431,13 @@ def merge_adjacent_citations_in_dir(root: Path) -> list[Path]:
     """
 
     updated: list[Path] = []
-    for pattern in ("*.tex", "*.ltx"):
-        for path in root.rglob(pattern):
-            original = path.read_text(encoding="utf-8", errors="ignore")
-            merged = merge_adjacent_citations(original)
-            if merged == original:
-                continue
-            path.write_text(merged, encoding="utf-8", newline="")
-            updated.append(path)
+    for path in iter_latex_documents(root):
+        original = path.read_text(encoding="utf-8", errors="ignore")
+        merged = merge_adjacent_citations(original)
+        if merged == original:
+            continue
+        path.write_text(merged, encoding="utf-8", newline="")
+        updated.append(path)
     return updated
 
 
@@ -461,16 +465,15 @@ def ensure_numeric_natbib_styles(root: Path) -> list[Path]:
     """Normalize natbib style files so templates do not force author-year citations."""
 
     updated_files: list[Path] = []
-    for pattern in ("*.sty", "*.cls"):
-        for path in root.rglob(pattern):
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            updated = text
-            for source, target in NATBIB_AUTHORYEAR_REPLACEMENTS.items():
-                updated = updated.replace(source, target)
-            if updated == text:
-                continue
-            path.write_text(updated, encoding="utf-8", newline="")
-            updated_files.append(path)
+    for path in iter_source_files(root, LATEX_STYLE_SUFFIXES):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        updated = text
+        for source, target in NATBIB_AUTHORYEAR_REPLACEMENTS.items():
+            updated = updated.replace(source, target)
+        if updated == text:
+            continue
+        path.write_text(updated, encoding="utf-8", newline="")
+        updated_files.append(path)
     return updated_files
 
 
@@ -554,7 +557,7 @@ def _find_latex_title_span(text: str) -> tuple[int, int] | None:
 def _find_pdf_title_assignment_span(text: str) -> tuple[int, int] | None:
     for match in PDF_TITLE_ASSIGNMENT_RE.finditer(text):
         brace_start = match.end() - 1
-        end = _find_balanced_end(text, brace_start, "{", "}")
+        end = balanced_group_end(text, brace_start, "{", "}")
         if end is not None:
             return match.start(), end
     return None
@@ -574,41 +577,16 @@ def _title_command_has_content(title_command: str) -> bool:
 
 
 def _parse_title_command_end(text: str, start: int) -> int | None:
-    index = _skip_whitespace(text, start)
+    index = skip_whitespace(text, start)
     while index < len(text) and text[index] == "[":
-        end = _find_balanced_end(text, index, "[", "]")
+        end = balanced_group_end(text, index, "[", "]")
         if end is None:
             return None
-        index = _skip_whitespace(text, end)
+        index = skip_whitespace(text, end)
 
     if index >= len(text) or text[index] != "{":
         return None
-    return _find_balanced_end(text, index, "{", "}")
-
-
-def _find_balanced_end(text: str, start: int, open_char: str, close_char: str) -> int | None:
-    depth = 0
-    index = start
-    while index < len(text):
-        char = text[index]
-        if char == "\\":
-            index += 2
-            continue
-        if char == open_char:
-            depth += 1
-        elif char == close_char:
-            depth -= 1
-            if depth == 0:
-                return index + 1
-        index += 1
-    return None
-
-
-def _skip_whitespace(text: str, start: int) -> int:
-    index = start
-    while index < len(text) and text[index].isspace():
-        index += 1
-    return index
+    return balanced_group_end(text, index, "{", "}")
 
 
 def _is_safe_latex_boundary(text: str) -> bool:
@@ -655,7 +633,7 @@ def _is_safe_latex_boundary(text: str) -> bool:
         if text.startswith(r"\\", i):
             i += 2
             if i < len(text) and text[i] == "[":
-                optional_end = _find_balanced_end(text, i, "[", "]")
+                optional_end = balanced_group_end(text, i, "[", "]")
                 if optional_end is not None:
                     i = optional_end
             continue
@@ -729,32 +707,13 @@ def _read_environment_command(text: str, start: int, command: str) -> str | None
 def _strip_latex_comment_from_line(line: str) -> str:
     i = 0
     while i < len(line):
-        if line[i] == "%" and not _is_escaped_percent(line, i):
+        if line[i] == "%" and not is_escaped(line, i):
             if not line[:i].strip():
                 return ""
-            newline = _line_ending(line)
+            newline = line_ending(line)
             return line[:i].rstrip() + newline
         i += 1
     return line
-
-
-def _is_escaped_percent(line: str, index: int) -> bool:
-    backslashes = 0
-    cursor = index - 1
-    while cursor >= 0 and line[cursor] == "\\":
-        backslashes += 1
-        cursor -= 1
-    return backslashes % 2 == 1
-
-
-def _line_ending(line: str) -> str:
-    if line.endswith("\r\n"):
-        return "\r\n"
-    if line.endswith("\n"):
-        return "\n"
-    if line.endswith("\r"):
-        return "\r"
-    return ""
 
 
 def _update_verbatim_stack(line: str, stack: list[str]) -> None:
