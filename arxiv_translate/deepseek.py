@@ -242,6 +242,7 @@ def validate_translation_response(
     validate_latex_braces_balanced(content)
     validate_environment_boundaries_preserved(content, source_fragment)
     validate_latex_commands_preserved(content, source_fragment)
+    validate_alignment_tabs_preserved(content, source_fragment)
     return content
 
 
@@ -384,6 +385,37 @@ def _latex_commands(content: str) -> list[str]:
                 break
         commands.extend(match.group("name") for match in LATEX_COMMAND_RE.finditer(visible))
     return commands
+
+
+def validate_alignment_tabs_preserved(
+    content: str,
+    source_fragment: str,
+) -> None:
+    """Reject added or removed unescaped alignment tabs."""
+
+    if not source_fragment:
+        return
+    source_count = _unescaped_character_count(source_fragment, "&")
+    translated_count = _unescaped_character_count(content, "&")
+    if translated_count == source_count:
+        return
+    raise DeepSeekError(
+        "DeepSeek translation changed LaTeX alignment tabs: "
+        f"source count {source_count}, output count {translated_count}",
+        retryable=True,
+        protocol_violation=True,
+    )
+
+
+def _unescaped_character_count(content: str, target: str) -> int:
+    count = 0
+    for line in content.splitlines():
+        for index, char in enumerate(line):
+            if char == "%" and not _is_escaped_character(line, index):
+                break
+            if char == target and not _is_escaped_character(line, index):
+                count += 1
+    return count
 
 
 def validate_translation_protocol(content: str) -> None:
