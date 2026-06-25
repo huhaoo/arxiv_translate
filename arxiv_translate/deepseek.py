@@ -46,6 +46,20 @@ SKIP_UNTRANSLATED_CHECK_ENVIRONMENTS = {
     "Verbatim",
     "verbatim",
 }
+NONSTRUCTURAL_TEXT_COMMANDS = {
+    "emph",
+    "textbf",
+    "textit",
+    "textmd",
+    "textnormal",
+    "textrm",
+    "textsc",
+    "textsf",
+    "textsl",
+    "texttt",
+    "textup",
+    "underline",
+}
 
 
 SYSTEM_PROMPT = """You are a strict LaTeX-to-Chinese translation engine.
@@ -242,7 +256,12 @@ def validate_translation_response(
     validate_translation_protocol(content)
     validate_latex_braces_balanced(content)
     validate_environment_boundaries_preserved(content, source_fragment)
-    validate_latex_commands_preserved(content, source_fragment)
+    validate_latex_commands_preserved(
+        content,
+        source_fragment,
+        warning_logger=warning_logger,
+        warning_context=warning_context,
+    )
     validate_alignment_tabs_preserved(content, source_fragment)
     return content
 
@@ -338,6 +357,8 @@ def _environment_boundaries(content: str) -> list[tuple[str, str]]:
 def validate_latex_commands_preserved(
     content: str,
     source_fragment: str,
+    warning_logger: Callable[[str], None] | None = None,
+    warning_context: str = "",
 ) -> None:
     """Reject translations that add, remove, or rename LaTeX commands."""
 
@@ -348,6 +369,16 @@ def validate_latex_commands_preserved(
     source_counts = Counter(source_commands)
     translated_counts = Counter(translated_commands)
     if translated_counts == source_counts:
+        return
+    source_structural_counts = _structural_latex_command_counts(source_commands)
+    translated_structural_counts = _structural_latex_command_counts(translated_commands)
+    if translated_structural_counts == source_structural_counts:
+        _warn_nonstructural_command_change(
+            warning_logger,
+            warning_context,
+            source_counts,
+            translated_counts,
+        )
         return
     missing = list((source_counts - translated_counts).elements())
     added = list((translated_counts - source_counts).elements())
@@ -360,6 +391,31 @@ def validate_latex_commands_preserved(
         f"{len(translated_commands)})",
         retryable=True,
         protocol_violation=True,
+    )
+
+
+def _structural_latex_command_counts(commands: list[str]) -> Counter[str]:
+    return Counter(
+        command for command in commands if command not in NONSTRUCTURAL_TEXT_COMMANDS
+    )
+
+
+def _warn_nonstructural_command_change(
+    warning_logger: Callable[[str], None] | None,
+    warning_context: str,
+    source_counts: Counter[str],
+    translated_counts: Counter[str],
+) -> None:
+    if warning_logger is None:
+        return
+    missing = list((source_counts - translated_counts).elements())
+    added = list((translated_counts - source_counts).elements())
+    missing_summary = ", ".join(f"\\{name}" for name in missing[:5]) or "none"
+    added_summary = ", ".join(f"\\{name}" for name in added[:5]) or "none"
+    context = f" on {warning_context}" if warning_context else ""
+    warning_logger(
+        "warning: accepted translation with changed non-structural LaTeX "
+        f"text commands{context}: missing {missing_summary}; added {added_summary}"
     )
 
 
