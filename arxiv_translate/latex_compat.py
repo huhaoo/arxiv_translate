@@ -23,6 +23,10 @@ BBM_PACKAGE_RE = re.compile(
 MICROTYPE_PACKAGE_RE = re.compile(
     r"^\s*(?:\\AtEndOfClass\{)?\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{microtype\}"
 )
+LEGACY_ENCODING_PACKAGE_RE = re.compile(
+    r"^\s*(?:\\AtEndOfClass\{)?\\(?:usepackage|RequirePackage)"
+    r"(?:\[[^\]]*\])?\{(?:inputenc|fontenc)\}"
+)
 CJKUTF8_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?P<options>\[[^\]]*\])?\{CJKutf8\}(?P<tail>\s*(?:%.*)?)$"
 )
@@ -152,6 +156,7 @@ def ensure_chinese_latex_support(main_tex: Path) -> bool:
                 "\\ifPDFTeX\n"
                 "  \\usepackage[UTF8]{ctex}\n"
                 "\\else\n"
+                "  \\PassOptionsToPackage{no-math}{fontspec}\n"
                 "  \\usepackage[fontset=fandol]{ctex}\n"
                 "\\fi\n"
             )
@@ -216,9 +221,11 @@ def guard_pdftex_compatibility_for_xelatex(
     text = protect_zero_arg_macros_before_nonascii(text, zero_arg_macro_names)
     text = prefer_numeric_natbib_for_numeric_bibliography_styles(text)
     text = prefer_fandol_ctex_for_xelatex(text)
+    text = ensure_fontspec_no_math_for_xelatex(text)
     text = guard_pdfoutput_for_xelatex(text)
     text = guard_pdfminorversion_for_xelatex(text)
     text = guard_declare_unicode_character_for_xelatex(text)
+    text = guard_legacy_encoding_packages_for_xelatex(text)
     text = guard_microtype_for_xelatex(text)
     text = guard_cjkutf8_for_xelatex(text)
     text = replace_minted_environment_with_fvextra(text)
@@ -279,6 +286,14 @@ def guard_microtype_for_xelatex(text: str) -> str:
             1,
         )
     return text
+
+
+def guard_legacy_encoding_packages_for_xelatex(text: str) -> str:
+    """Load inputenc/fontenc only under pdfTeX so fontspec keeps legacy math intact."""
+
+    if "inputenc" not in text and "fontenc" not in text:
+        return text
+    return _guard_lines_for_pdftex(text, LEGACY_ENCODING_PACKAGE_RE)
 
 
 def guard_cjkutf8_for_xelatex(text: str) -> str:
@@ -734,6 +749,27 @@ def prefer_fandol_ctex_for_xelatex(text: str) -> str:
     )
 
 
+def ensure_fontspec_no_math_for_xelatex(text: str) -> str:
+    """Keep fontspec from remapping legacy math symbols when CJK support is loaded."""
+
+    if (
+        "ctex" not in text
+        and "xeCJK" not in text
+        and "xecjk" not in text
+    ):
+        return text
+    if "unicode-math" in text or r"\PassOptionsToPackage{no-math}{fontspec}" in text:
+        return text
+    if re.search(
+        r"\\(?:usepackage|RequirePackage)\[[^\]]*no-math[^\]]*\]\{fontspec\}",
+        text,
+    ):
+        return text
+    return _insert_before_documentclass(
+        text, "\\PassOptionsToPackage{no-math}{fontspec}\n"
+    )
+
+
 def _zero_arg_macro_names(text: str) -> set[str]:
     names: set[str] = set()
     for match in COMMAND_DEFINITION_RE.finditer(text):
@@ -867,3 +903,10 @@ def _insert_after_documentclass(text: str, insertion: str) -> str:
     if not match:
         return text
     return text[: match.end()] + "\n" + insertion + text[match.end() :]
+
+
+def _insert_before_documentclass(text: str, insertion: str) -> str:
+    match = DOCUMENTCLASS_RE.search(text)
+    if not match:
+        return insertion + text
+    return text[: match.start()] + insertion + text[match.start() :]

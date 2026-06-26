@@ -709,7 +709,7 @@ def _strip_latex_comment_from_line(line: str) -> str:
     while i < len(line):
         if line[i] == "%" and not is_escaped(line, i):
             if not line[:i].strip():
-                return ""
+                return line_ending(line)
             newline = line_ending(line)
             return line[:i].rstrip() + newline
         i += 1
