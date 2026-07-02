@@ -5,3 +5,4 @@ Use these preferred Chinese translations when the English term appears as a tech
 | English term | Preferred Chinese translation |
 | --- | --- |
 | mechanistic interpretability | 机制可解释性 |
+| representation | 表示，表征 |

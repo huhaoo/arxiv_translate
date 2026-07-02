@@ -31,6 +31,9 @@ HYPERREF_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{hyperref\}(?P<tail>\s*(?:%.*)?)$"
 )
 BEGIN_DOCUMENT_RE = re.compile(r"(?<!\\)\\begin\{document\}")
+LATEX_OPTION_LIST_START_RE = re.compile(
+    r"\\[A-Za-z@]+\*?(?:\{[^{}\r\n]*\})?\s*\["
+)
 NATBIB_STYLE_SNIPPET = (
     "% arxiv-translate: superscript numeric citations\n"
     "\\makeatletter\n"
@@ -162,6 +165,7 @@ def strip_latex_comments(text: str) -> str:
 
     output: list[str] = []
     verbatim_stack: list[str] = []
+    optional_depth = 0
     for line in text.splitlines(keepends=True):
         if verbatim_stack:
             output.append(line)
@@ -169,8 +173,11 @@ def strip_latex_comments(text: str) -> str:
             continue
 
         stripped = _strip_latex_comment_from_line(line)
+        if optional_depth > 0 and not stripped.strip():
+            continue
         output.append(stripped)
         _update_verbatim_stack(stripped, verbatim_stack)
+        optional_depth = _updated_optional_argument_depth(stripped, optional_depth)
     return "".join(output)
 
 
@@ -714,6 +721,20 @@ def _strip_latex_comment_from_line(line: str) -> str:
             return line[:i].rstrip() + newline
         i += 1
     return line
+
+
+def _updated_optional_argument_depth(line: str, current_depth: int) -> int:
+    depth = current_depth
+    if depth == 0 and not LATEX_OPTION_LIST_START_RE.search(line):
+        return 0
+    for index, char in enumerate(line):
+        if is_escaped(line, index):
+            continue
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth > 0:
+            depth -= 1
+    return depth
 
 
 def _update_verbatim_stack(line: str, stack: list[str]) -> None:

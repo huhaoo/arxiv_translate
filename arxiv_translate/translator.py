@@ -9,7 +9,11 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .deepseek import DeepSeekClient, validate_translation_response
+from .deepseek import (
+    DeepSeekClient,
+    normalize_latex_command_cjk_boundaries,
+    validate_translation_response,
+)
 from .errors import DeepSeekError
 from .preferred_translations import load_preferred_translations
 from .preserved_terms import load_preserved_terms
@@ -153,6 +157,7 @@ def translate_tex_tree(
             "".join(part or "" for part in out),
             text_box_blocks[path],
         )
+        translated_text = normalize_latex_command_cjk_boundaries(translated_text)
         path.write_text(
             translated_text,
             encoding="utf-8",
@@ -220,7 +225,7 @@ def _cache_key(
             "model": model,
             "preferred_translations": load_preferred_translations(),
             "preserved_terms": load_preserved_terms(),
-            "prompt": "latex-guide-context-v12",
+            "prompt": "latex-guide-context-v13",
         },
         ensure_ascii=False,
         sort_keys=True,

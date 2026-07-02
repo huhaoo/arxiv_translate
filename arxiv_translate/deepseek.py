@@ -32,6 +32,9 @@ STRUCTURAL_IDENTIFIER_ARG_RE = re.compile(
 )
 ENVIRONMENT_BOUNDARY_RE = re.compile(r"\\(?P<command>begin|end)\{(?P<name>[^{}]+)\}")
 LATEX_COMMAND_RE = re.compile(r"(?<!\\)\\(?P<name>[A-Za-z@]+)")
+LATEX_COMMAND_CJK_BOUNDARY_RE = re.compile(
+    r"(?<!\\)\\(?P<command>[A-Za-z@]+)(?=[\u3400-\u9fff])"
+)
 UNTRANSLATED_ENGLISH_RE = re.compile(
     r"\b[A-Za-z][A-Za-z'-]{2,}"
     r"(?:[ \t\r\n,;:()\-]+[A-Za-z][A-Za-z'-]{2,}){11,}\b"
@@ -47,7 +50,15 @@ SKIP_UNTRANSLATED_CHECK_ENVIRONMENTS = {
     "verbatim",
 }
 NONSTRUCTURAL_TEXT_COMMANDS = {
+    "bf",
+    "em",
     "emph",
+    "it",
+    "md",
+    "rm",
+    "sc",
+    "sf",
+    "sl",
     "textbf",
     "textit",
     "textmd",
@@ -58,7 +69,9 @@ NONSTRUCTURAL_TEXT_COMMANDS = {
     "textsl",
     "texttt",
     "textup",
+    "tt",
     "underline",
+    "up",
 }
 
 
@@ -90,6 +103,7 @@ Translate:
 
 Preserve exactly:
 - All LaTeX commands and environment names, including backslashes, braces, optional arguments, and command order.
+- Preserve legacy font declarations such as \\it, \\bf, \\rm, \\em, \\sc, \\sf, \\sl, and \\tt exactly. Do not modernize them to \\textit, \\textbf, or similar commands.
 - Labels, refs, citations, bibliography keys, anchors, counters, and cross-reference identifiers.
 - Never escape underscores in labels, refs, citations, or bibliography keys. Keep identifiers like section:sparse_autoencoder, not section:sparse\\_autoencoder.
 - Do not use LaTeX backtick quotes in translated prose. Convert quoted visible
@@ -97,6 +111,7 @@ Preserve exactly:
   and right single quote (’) for single quotes. Never output any backtick
   character, doubled backticks, or backslash-prefixed quote punctuation.
 - Math expressions and math environments: $...$, $$...$$, \\(...\\), \\[...\\], equation, align, gather, multline, cases, cases*, array, matrix, theorem-like math displays, and all math symbols.
+- Never replace LaTeX math commands such as \\sim with Unicode math symbols such as ∼.
 - In math-mode portions of display environments such as equation, align, gather, multline, split, and cases, do not wrap symbols in additional $...$ delimiters. For example, keep i \\in x_t directly in math mode.
 - Do not assume every nested cell or argument inside a display environment is in math mode. Preserve text-mode islands such as \\text{...} and \\mbox{...}. In mathtools cases*, the second column is text mode; when translated prose in that column contains math, retain or add inline math delimiters required for valid LaTeX, for example: & 如果 $r \\neq r'$ \\\\.
 - Distinguish cases from cases*: ordinary cases columns are math mode, while the condition column of cases* is text mode.
@@ -253,6 +268,7 @@ def validate_translation_response(
 
     content = normalize_latex_quote_punctuation(content)
     content = normalize_structural_identifier_escapes(content)
+    content = normalize_latex_command_cjk_boundaries(content)
     validate_translation_protocol(content)
     validate_latex_braces_balanced(content)
     validate_environment_boundaries_preserved(content, source_fragment)
@@ -290,6 +306,17 @@ def normalize_structural_identifier_escapes(content: str) -> str:
         return "\\" + match.group("command") + "{" + arg.replace(r"\_", "_") + "}"
 
     return STRUCTURAL_IDENTIFIER_ARG_RE.sub(replace, content)
+
+
+def normalize_latex_command_cjk_boundaries(content: str) -> str:
+    """Separate LaTeX control words from immediately following CJK text.
+
+    XeLaTeX can treat a control word glued to Chinese text as a single
+    undefined control sequence. A space after the ASCII command name keeps the
+    original command while making the following Chinese text visible text again.
+    """
+
+    return LATEX_COMMAND_CJK_BOUNDARY_RE.sub(r"\\\g<command> ", content)
 
 
 def validate_latex_braces_balanced(content: str) -> None:
@@ -380,8 +407,8 @@ def validate_latex_commands_preserved(
             translated_counts,
         )
         return
-    missing = list((source_counts - translated_counts).elements())
-    added = list((translated_counts - source_counts).elements())
+    missing = list((source_structural_counts - translated_structural_counts).elements())
+    added = list((translated_structural_counts - source_structural_counts).elements())
     missing_summary = ", ".join(f"\\{name}" for name in missing[:5]) or "none"
     added_summary = ", ".join(f"\\{name}" for name in added[:5]) or "none"
     raise DeepSeekError(
@@ -579,7 +606,9 @@ def _translation_request(
             "Previous response was rejected by the caller because it violated "
             f"the output protocol: {retry_warning}\n"
             "Retry by returning raw LaTeX only. Do not wrap the answer in "
-            "markdown fences, XML tags, explanations, or any other boundary text.\n\n"
+            "markdown fences, XML tags, explanations, or any other boundary text. "
+            "Preserve every original LaTeX command exactly and remove any newly "
+            "added command that was not present in <CURRENT_FRAGMENT>.\n\n"
         )
 
     return retry_block + (
