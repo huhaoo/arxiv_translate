@@ -16,19 +16,20 @@
 - 一个兼容 DeepSeek 的 API key
 - 本地 TeX 发行版，用于编译；建议安装 `latexmk` 和 `xelatex`
 
-翻译器会使用 `config.local.json` 中配置的单个 OpenAI 兼容 chat completions 接口。该文件必须是一个 JSON 对象，并包含下方示例中的所有字段。
+翻译器会使用 `config.local.jsonc` 中配置的单个 OpenAI 兼容 chat completions 接口。该文件必须是一个 JSONC 对象，并包含下方示例中的所有字段。JSONC 支持 `//` 和 `/* ... */` 注释，VSCode 会按原生格式识别，不会把注释标红。
 
 ## API key 配置
 
-将 `config.local.example.json` 复制为 `config.local.json`，然后把你的 API key 填进去：
+将 `config.local.example.jsonc` 复制为 `config.local.jsonc`，然后把你的 API key 填进去：
 
-```json
+```jsonc
 {
+  // DeepSeek API key
   "deepseek_api_key": "sk-your-deepseek-api-key",
   "deepseek_model": "deepseek-v4-pro",
   "deepseek_appendix_model": "deepseek-v4-flash",
   "deepseek_base_url": "https://api.deepseek.com/chat/completions",
-  "use_proxy": true
+  "use_proxy": true,
 }
 ```
 
@@ -37,7 +38,7 @@
 
 两个模型字段共用同一个 API key 和接口地址，分别用于正文和附录翻译。请求失败时会按单个客户端的重试策略重试，不再切换到其他 API 配置。
 
-`config.local.json` 已被 git 忽略，因此 key 只会保存在你的本机。
+`config.local.jsonc` 已被 git 忽略，因此 key 只会保存在你的本机。
 
 ## 使用方法
 

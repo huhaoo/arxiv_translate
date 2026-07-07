@@ -1,7 +1,8 @@
 {
+  // DeepSeek API key. Keep the real value only in config.local.jsonc.
   "deepseek_api_key": "sk-your-deepseek-api-key",
-  "deepseek_model": "deepseek-v4-flash",
+  "deepseek_model": "deepseek-v4-pro",
   "deepseek_appendix_model": "deepseek-v4-flash",
   "deepseek_base_url": "https://api.deepseek.com/chat/completions",
-  "use_proxy": true
+  "use_proxy": true,
 }

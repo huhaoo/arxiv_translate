@@ -9,4 +9,5 @@ build/
 *.egg-info/
 arxiv_outputs/
 config.local.json
+config.local.jsonc
 .arxiv_translate_history

@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         default=DEFAULT_CONFIG_PATH,
-        help=f"local JSON config file; defaults to {DEFAULT_CONFIG_PATH}",
+        help=f"local JSONC config file; defaults to {DEFAULT_CONFIG_PATH}",
     )
     parser.add_argument(
         "--chunk-chars",
