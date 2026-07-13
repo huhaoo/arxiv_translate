@@ -1,5 +1,12 @@
 # arxiv-translate
 
+## Stable Baseline
+
+The active stable baseline is `72fd7d8c2415733f6ee914340bf7e2e1a711227a`.
+The superseded experimental translation protocol is preserved as
+`cdd2533d506d5f943a453274af0a7968ad7e8d93` and tagged
+`pre-stable-rollback-cdd2533` for future comparison or recovery.
+
 用于将 arXiv TeX 源码翻译为中文、重新编译论文，并支持一键导入 EndNote 的命令行工具。
 
 支持的 CLI 输入形式：
