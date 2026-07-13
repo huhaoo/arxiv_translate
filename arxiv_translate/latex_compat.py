@@ -12,6 +12,8 @@ from .source_files import (
 )
 
 DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}")
+ACMART_DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{acmart\}")
+ACMART_CJK_BASELINE_MARKER = "arxiv-translate: acmart CJK baseline compatibility"
 PDFOUTPUT_RE = re.compile(r"(?m)^(?P<indent>\s*)\\pdfoutput\s*=\s*(?P<value>\d+)\s*$")
 PDFMINORVERSION_RE = re.compile(
     r"^\s*\\pdfminorversion\s*=\s*\d+\s*(?:%[^\r\n]*)?$"
@@ -163,6 +165,7 @@ def ensure_chinese_latex_support(main_tex: Path) -> bool:
             text = text[: match.end()] + injection + text[match.end() :]
 
     text = prefer_fandol_ctex_for_xelatex(text)
+    text = allow_acmart_ctex_baselinestretch(text)
 
     if "\\ifPDFTeX" in text and not _has_iftex_package(text):
         text = _insert_after_documentclass(text, "\\usepackage{iftex}\n")
@@ -171,6 +174,34 @@ def ensure_chinese_latex_support(main_tex: Path) -> bool:
         return False
     main_tex.write_text(text, encoding="utf-8", newline="")
     return True
+
+
+def allow_acmart_ctex_baselinestretch(text: str) -> str:
+    """Accept ctex's line-spacing setup in translated ``acmart`` documents.
+
+    acmart snapshots ``\\baselinestretch`` while loading the class, whereas ctex
+    defines it later as part of Chinese font setup.  Refreshing acmart's snapshot
+    after all packages have loaded prevents a false submission-style violation.
+    """
+
+    if (
+        ACMART_CJK_BASELINE_MARKER in text
+        or ACMART_DOCUMENTCLASS_RE.search(text) is None
+        or "ctex" not in text.lower()
+    ):
+        return text
+
+    begin_document = re.search(r"(?<!\\)\\begin\{document\}", text)
+    if begin_document is None:
+        return text
+
+    snippet = (
+        f"% {ACMART_CJK_BASELINE_MARKER}\n"
+        "\\makeatletter\n"
+        "\\let\\ACM@origbaselinestretch\\baselinestretch\n"
+        "\\makeatother\n"
+    )
+    return text[: begin_document.start()] + snippet + text[begin_document.start() :]
 
 
 def ensure_latex_compatibility(root: Path) -> list[Path]:

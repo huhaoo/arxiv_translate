@@ -21,12 +21,19 @@ VERBATIM_ENVIRONMENTS = {
     "filecontents*",
     "lstlisting",
     "minted",
+    # These are custom tcolorbox listing environments used by several arXiv
+    # sources for executable prompts and examples.  Their contents may contain
+    # Markdown (notably literal '#') and template braces, so they must not be
+    # sent through prose translation.
+    "prompt",
+    "case",
     "Verbatim",
     "verbatim",
 }
 BEGIN_ENV_RE = re.compile(r"\\begin\{([^}]+)\}")
 TITLE_COMMAND_RE = re.compile(r"(?<!\\)\\title\b")
 PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{")
+PDF_METADATA_TITLE_MARKER = "% arxiv-translate: PDF metadata title"
 HYPERREF_PACKAGE_RE = re.compile(
     r"(?m)^(?P<indent>\s*)\\usepackage(?:\[[^\]]*\])?\{hyperref\}(?P<tail>\s*(?:%.*)?)$"
 )
@@ -372,8 +379,9 @@ def ensure_english_pdf_title(
     translated_main_tex: Path,
     original_main_tex: Path,
     fallback_title: str,
+    arxiv_id: str = "",
 ) -> bool:
-    """Keep the translated PDF's visible title equal to the English source title."""
+    """Keep the visible English title and add the arXiv ID to PDF metadata."""
 
     translated = translated_main_tex.read_text(encoding="utf-8", errors="ignore")
     original = original_main_tex.read_text(encoding="utf-8", errors="ignore")
@@ -383,7 +391,15 @@ def ensure_english_pdf_title(
     if pdf_title_assignment is None and fallback_title:
         pdf_title_assignment = f"pdftitle={{{escape_latex_title_text(fallback_title)}}}"
     if pdf_title_assignment is not None:
+        pdf_title_assignment = append_arxiv_id_to_pdf_title(
+            pdf_title_assignment,
+            arxiv_id,
+        )
         updated = replace_pdf_title_assignment(updated, pdf_title_assignment)
+        updated = ensure_pdf_metadata_title_at_document_start(
+            updated,
+            pdf_title_assignment,
+        )
 
     title_command = extract_latex_title_command(original)
     if title_command is not None and _title_command_has_content(title_command):
@@ -399,6 +415,60 @@ def ensure_english_pdf_title(
         return False
     translated_main_tex.write_text(updated, encoding="utf-8")
     return True
+
+
+def append_arxiv_id_to_pdf_title(title_assignment: str, arxiv_id: str) -> str:
+    """Append ``[arXiv:...]`` inside a hyperref ``pdftitle`` assignment."""
+
+    suffix = f"[arXiv:{arxiv_id.strip()}]"
+    if not arxiv_id.strip() or suffix.casefold() in title_assignment.casefold():
+        return title_assignment
+
+    span = _find_pdf_title_assignment_span(title_assignment)
+    if span is None:
+        return title_assignment
+    return title_assignment[: span[1] - 1] + f" {suffix}" + title_assignment[span[1] - 1 :]
+
+
+def ensure_pdf_metadata_title_at_document_start(
+    text: str,
+    title_assignment: str,
+) -> str:
+    """Set the final PDF title after document-title hooks have run.
+
+    Classes such as ``acmart`` reset PDF metadata while typesetting
+    ``\\maketitle``.  Placing this generated setting immediately after that
+    command makes the requested title authoritative without changing the
+    visible title.  Documents without ``\\maketitle`` use document start.
+    """
+
+    snippet = f"{PDF_METADATA_TITLE_MARKER}\n\\hypersetup{{{title_assignment}}}\n"
+    updated = text
+    marker_start = text.find(PDF_METADATA_TITLE_MARKER)
+    if marker_start != -1:
+        command_start = text.find(r"\hypersetup", marker_start)
+        if command_start == -1:
+            return text[:marker_start] + snippet + text[marker_start + len(PDF_METADATA_TITLE_MARKER) :]
+        group_start = text.find("{", command_start)
+        group_end = (
+            balanced_group_end(text, group_start, "{", "}")
+            if group_start != -1
+            else None
+        )
+        if group_end is None:
+            return text
+        updated = text[:marker_start] + text[group_end:]
+
+    begin_document = BEGIN_DOCUMENT_RE.search(updated)
+    if begin_document is None:
+        return updated
+    maketitle = re.search(r"(?<!\\)\\maketitle\b", updated[begin_document.end() :])
+    insertion = (
+        begin_document.end() + maketitle.end()
+        if maketitle is not None
+        else begin_document.end()
+    )
+    return updated[:insertion] + "\n" + snippet + updated[insertion:]
 
 
 _CITE_CMD = r"\\cite(?:p|t|alp|alt|author|year|yearpar)?\*?(?:\[[^\]]*\])?\{([^{}]*)\}"
@@ -446,6 +516,69 @@ def merge_adjacent_citations_in_dir(root: Path) -> list[Path]:
         path.write_text(merged, encoding="utf-8", newline="")
         updated.append(path)
     return updated
+
+
+def remove_empty_caption_paragraphs(text: str) -> str:
+    """Replace blank lines in ``\\caption`` arguments with spaces.
+
+    The ``caption`` package rejects paragraph tokens in caption arguments.
+    Translation models can introduce blank lines while formatting long captions,
+    so normalize only those blank lines and leave regular document paragraphs
+    untouched.
+    """
+
+    verbatim_spans = _find_verbatim_environment_spans(text)
+    output: list[str] = []
+    cursor = 0
+
+    for match in re.finditer(r"(?<!\\)\\caption\b", text):
+        if _position_in_spans(match.start(), verbatim_spans):
+            continue
+
+        argument_start = skip_whitespace(text, match.end())
+        if argument_start < len(text) and text[argument_start] == "[":
+            optional_end = balanced_group_end(text, argument_start, "[", "]")
+            if optional_end is None:
+                continue
+            argument_start = skip_whitespace(text, optional_end)
+        if argument_start >= len(text) or text[argument_start] != "{":
+            continue
+
+        argument_end = balanced_group_end(text, argument_start, "{", "}")
+        if argument_end is None:
+            continue
+        caption = text[argument_start + 1 : argument_end - 1]
+        normalized_caption = re.sub(r"(?:[ \t]*\r?\n){2,}[ \t]*", " ", caption)
+        if normalized_caption == caption:
+            continue
+
+        output.append(text[cursor : argument_start + 1])
+        output.append(normalized_caption)
+        output.append("}")
+        cursor = argument_end
+
+    if not output:
+        return text
+    output.append(text[cursor:])
+    return "".join(output)
+
+
+def remove_empty_caption_paragraphs_in_dir(root: Path) -> list[Path]:
+    """Normalize blank caption paragraphs in every TeX document under *root*."""
+
+    updated: list[Path] = []
+    for path in iter_latex_documents(root):
+        original = path.read_text(encoding="utf-8", errors="ignore")
+        normalized = remove_empty_caption_paragraphs(original)
+        if normalized == original:
+            continue
+        path.write_text(normalized, encoding="utf-8", newline="")
+        updated.append(path)
+    return updated
+
+
+def _position_in_spans(position: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= position < end for start, end in spans)
 
 
 def ensure_superscript_numeric_citations(main_tex: Path) -> bool:

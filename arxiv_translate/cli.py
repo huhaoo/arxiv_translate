@@ -28,6 +28,7 @@ from .tex import (
     ensure_numeric_natbib_styles,
     ensure_superscript_numeric_citations,
     merge_adjacent_citations_in_dir,
+    remove_empty_caption_paragraphs_in_dir,
 )
 from .translator import (
     DEFAULT_CHUNK_CHARS,
@@ -311,7 +312,12 @@ def run(args: argparse.Namespace) -> int:
         print(f"      translated {len(translated_files)} file(s)")
 
     main_tex = discover_main_tex(translated_dir, args.main)
-    if ensure_english_pdf_title(main_tex, original_main_tex, metadata.title):
+    if ensure_english_pdf_title(
+        main_tex,
+        original_main_tex,
+        metadata.title,
+        metadata.arxiv_id,
+    ):
         print("      title: kept original English title")
     if args.superscript_citations:
         merged_files = merge_adjacent_citations_in_dir(translated_dir)
@@ -329,6 +335,13 @@ def run(args: argparse.Namespace) -> int:
     compatibility_files = ensure_latex_compatibility(translated_dir)
     if compatibility_files:
         print(f"      compatibility fixes: {len(compatibility_files)} file(s)")
+
+    caption_files = remove_empty_caption_paragraphs_in_dir(translated_dir)
+    if caption_files:
+        print(
+            "      captions: removed empty paragraphs in "
+            f"{len(caption_files)} file(s)"
+        )
 
     ensure_chinese_latex_support(main_tex)
     print(f"      main TeX: {main_tex.relative_to(translated_dir)}")

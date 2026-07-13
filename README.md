@@ -94,6 +94,15 @@ python -m arxiv_translate https://arxiv.org/html/2401.00001 --keep-source-archiv
 
 如果 DeepSeek 返回 markdown 代码围栏或内部提示边界标签，而不是原始 LaTeX，翻译请求会立刻重试；默认重试上限是 3 次。
 
+翻译保护规则、编译后的自动处理、PDF 元数据和 EndNote 附件规则见
+[翻译与编译行为](docs/translation-behavior.md)。
+
+`prompt` 和 `case` 是两个例外：它们通常由源码定义为 `tcolorbox` 的
+listing 环境，内部可能包含 `#` 标题、`{变量}` 占位符、命令或结构化的
+模型输入/输出。因此工具会保留这两个环境（包括标题和内部内容）原样，不将其
+发送给翻译模型。这只影响名称恰为 `prompt` 或 `case` 的环境，不影响普通正文
+或其他文本框；相应地，框内面向读者的英文说明也会保持英文。
+
 附录 TeX 文件，以及 `\appendix` 命令之后的分块，会使用 `deepseek_appendix_model`，这样较长的附录可以使用成本更低的 flash 模型，而正文仍使用 `deepseek_model`。
 
 翻译过程中，命令会打印紧凑的分块进度条，让长论文也能看到明确的推进状态。

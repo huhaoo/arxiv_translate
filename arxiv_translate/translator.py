@@ -30,6 +30,14 @@ from .tex import (
 DEFAULT_CHUNK_CHARS = 2048
 DEFAULT_CONTEXT_CHARS = 250
 DEFAULT_PARALLEL_CHUNKS = 8
+MACRO_DEFINITION_RE = re.compile(
+    r"\\(?:newcommand|renewcommand|providecommand|DeclareRobustCommand|"
+    r"def|gdef|edef|xdef|newenvironment|renewenvironment|newtcolorbox|"
+    r"newtcblisting|newtheorem)\b"
+)
+MACRO_FILE_STEMS = {"macro", "macros", "command", "commands", "preamble"}
+
+
 class TranslationCache:
     def __init__(self, path: Path):
         self.path = path
@@ -82,7 +90,10 @@ def translate_tex_tree(
         if original != raw:
             path.write_text(original, encoding="utf-8", newline="")
         protected_original, protected_text_boxes = protect_latex_text_boxes(original)
-        if not should_translate_tex(protected_original):
+        if (
+            not should_translate_tex(protected_original)
+            or _is_macro_definition_file(path, protected_original)
+        ):
             continue
 
         chunks = split_latex_for_translation(protected_original, chunk_chars)
@@ -166,6 +177,17 @@ def translate_tex_tree(
         translated.append(path)
 
     return translated
+
+
+def _is_macro_definition_file(path: Path, text: str) -> bool:
+    """Keep macro-heavy support files intact instead of sending them to the LLM."""
+
+    definitions = len(MACRO_DEFINITION_RE.findall(text))
+    if definitions == 0:
+        return False
+    if path.stem.lower() in MACRO_FILE_STEMS:
+        return True
+    return "\\begin{document}" not in text and definitions >= 8
 
 
 def _translate_chunk(
