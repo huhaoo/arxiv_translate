@@ -79,28 +79,6 @@ metadata title must likewise remain the original English title.
 8. Generate or update `endnote.enw` with the required title and all available
    attachments.
 
-## Luna subagent policy
-
-The controlling agent handles planning, downloads, output paths, compilation,
-EndNote generation, repair decisions, and final reporting.
-
-Use the **Luna** subagent/model for translation whenever the current ChatGPT
-App surface exposes it.  Divide work by non-overlapping TeX files or complete
-sections.  Never let two subagents edit the same target file.  Each Luna task
-must receive the matching source file, target path in `translated/`, the
-paper guide, and any terminology decisions.
-
-Luna must translate only human-readable prose.  It must preserve LaTeX
-commands, math, citation commands, labels, references, environments, macro
-definitions, comments that affect build behavior, file paths, bibliography
-data, and the English title.  It returns a list of edited files and unresolved
-ambiguities.  The controller checks those edits before compilation.
-
-If Luna is unavailable or cannot be selected, say so explicitly and ask for
-permission before substituting another paid model.  Do not silently fall back
-to an API provider and do not claim Luna was used when it was not.  A prompt
-cannot force a model that the current ChatGPT App account does not expose.
-
 ## Quality gates and repair
 
 - Preserve formulas, citations, labels, cross-references, custom commands,
