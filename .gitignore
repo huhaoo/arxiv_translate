@@ -1,0 +1,3 @@
+# Preserve the output directory itself, but never commit generated papers.
+arxiv_outputs/*
+!arxiv_outputs/.gitignore
