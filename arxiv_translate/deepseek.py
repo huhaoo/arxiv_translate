@@ -131,6 +131,8 @@ When translating inside command arguments:
 Quality constraints:
 - Maintain academic mathematical style.
 - Use concise, natural Simplified Chinese.
+- Do not insert spaces between Chinese characters or Chinese words in visible prose. Use a space only when it is needed to separate Chinese from an English term, number, or preserved LaTeX token.
+- In each visible Chinese prose paragraph, use at most 20 spaces between Chinese text. Spaces required solely by LaTeX syntax are exempt; remove all unnecessary word-separating spaces before returning the translation.
 - Do not simplify, reinterpret, add, remove, or reorder technical claims.
 - If preserving LaTeX conflicts with translation, prefer preserving LaTeX exactly."""
 
@@ -626,6 +628,10 @@ def _translation_request(
         "do not leave an English paragraph or sentence in the output unless it is "
         "code, a URL, a citation key, a file path, a model name, or LaTeX metadata "
         "that the system prompt says to preserve.\n"
+        "For visible Chinese prose, do not add spaces between Chinese characters or words. "
+        "Each Chinese prose paragraph may contain at most 20 spaces between Chinese text; "
+        "spaces required only by LaTeX syntax do not count. Remove unnecessary spaces "
+        "between Chinese words before returning the answer.\n"
         "Return only the translated content corresponding to <CURRENT_FRAGMENT>.\n\n"
         "Before finalizing, verify that your answer contains none of these strings: "
         "<CURRENT_FRAGMENT>, </CURRENT_FRAGMENT>, <PREVIOUS_CONTEXT>, "

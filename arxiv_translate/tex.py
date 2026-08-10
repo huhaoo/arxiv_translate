@@ -32,6 +32,7 @@ VERBATIM_ENVIRONMENTS = {
 }
 BEGIN_ENV_RE = re.compile(r"\\begin\{([^}]+)\}")
 TITLE_COMMAND_RE = re.compile(r"(?<!\\)\\title\b")
+DATE_COMMAND_RE = re.compile(r"(?<!\\)\\date\b")
 PDF_TITLE_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z])(?:Title|pdftitle)\s*=\s*\{")
 PDF_METADATA_TITLE_MARKER = "% arxiv-translate: PDF metadata title"
 HYPERREF_PACKAGE_RE = re.compile(
@@ -414,6 +415,45 @@ def ensure_english_pdf_title(
     if updated == translated:
         return False
     translated_main_tex.write_text(updated, encoding="utf-8")
+    return True
+
+
+def ensure_unavailable_latex_date(path: Path) -> bool:
+    """Replace or insert a fixed, non-runtime document date."""
+
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    spans: list[tuple[int, int]] = []
+    for match in DATE_COMMAND_RE.finditer(text):
+        index = skip_whitespace(text, match.end())
+        if index < len(text) and text[index] == "[":
+            optional_end = balanced_group_end(text, index, "[", "]")
+            if optional_end is None:
+                continue
+            index = skip_whitespace(text, optional_end)
+        if index >= len(text) or text[index] != "{":
+            continue
+        end = balanced_group_end(text, index, "{", "}")
+        if end is not None:
+            spans.append((match.start(), end))
+
+    if spans:
+        updated = text
+        for start, end in reversed(spans):
+            updated = updated[:start] + r"\date{不可用}" + updated[end:]
+    else:
+        begin_document = BEGIN_DOCUMENT_RE.search(text)
+        if begin_document is None:
+            return False
+        updated = (
+            text[: begin_document.start()]
+            + r"\date{不可用}"
+            + "\n"
+            + text[begin_document.start() :]
+        )
+
+    if updated == text:
+        return False
+    path.write_text(updated, encoding="utf-8", newline="")
     return True
 
 

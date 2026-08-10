@@ -25,6 +25,7 @@ from .source_files import contains_latex_document, iter_latex_documents
 from .tex import (
     discover_main_tex,
     ensure_english_pdf_title,
+    ensure_unavailable_latex_date,
     ensure_numeric_natbib_styles,
     ensure_superscript_numeric_citations,
     merge_adjacent_citations_in_dir,
@@ -319,6 +320,8 @@ def run(args: argparse.Namespace) -> int:
         metadata.arxiv_id,
     ):
         print("      title: kept original English title")
+    if ensure_unavailable_latex_date(main_tex):
+        print("      date: set to unavailable")
     if args.superscript_citations:
         merged_files = merge_adjacent_citations_in_dir(translated_dir)
         if merged_files:
